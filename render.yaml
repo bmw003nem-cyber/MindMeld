@@ -7,6 +7,6 @@ services:
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
-    value:
-      - key: 7584936976:AAGF2DcF2tBzehjaypzcyAidRtfJwh9dHMk
-        fromSecret: 7584936976:AAGF2DcF2tBzehjaypzcyAidRtfJwh9dHMk
+    envVars:
+      - key: BOT_TOKEN
+        value: 7584936976:AAGF2DcF2tBzehjaypzcyAidRtfJwh9dHMk
