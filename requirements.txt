@@ -1,6 +1,6 @@
 # Основные
 aiogram==2.25.1
-aiohttp==3.9.5
+aiohttp==3.8.6
 yarl==1.9.4
 multidict==6.0.5
 aiosignal==1.3.1
