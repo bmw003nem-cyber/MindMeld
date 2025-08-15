@@ -2,7 +2,6 @@ services:
   - type: web
     name: mindmeld-telegram-bot
     env: python
-    pythonVersion: 3.11.9   # << фиксируем Python 3.11
     region: frankfurt
     plan: free
     autoDeploy: true
@@ -12,4 +11,5 @@ services:
 
     envVars:
       - key: BOT_TOKEN
-        sync: false          # значение задаём в Render → Environment
+        # значение забираем из Render → Environment, поэтому в yaml без value
+        sync: false
