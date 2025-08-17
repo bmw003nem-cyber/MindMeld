@@ -354,14 +354,20 @@ import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def _respond(self):
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
-    
+        if self.command != "HEAD":  # тело только для GET
+            self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
+
+    def do_GET(self):
+        self._respond()
+
+    def do_HEAD(self):
+        self._respond()
+
     def log_message(self, format, *args):
-        # Suppress default logging
         pass
 
 def _run_keepalive_forever():
