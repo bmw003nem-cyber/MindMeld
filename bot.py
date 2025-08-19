@@ -474,32 +474,42 @@ async def daily_done_handler(callback: types.CallbackQuery):
     await callback.answer("🔥 Отлично! Задание дня выполнено.", show_alert=True)
 
 # ===================== BOT AUTO-RESTART =====================
-# (старую функцию _run_bot_polling мы убрали — она больше не нужна)
+# (старую функцию _run_bot_polling удалили — она больше не нужна)
 
 def setup_scheduler():
     """Setup the scheduler for daily insights"""
-    # Schedule daily insight at 8:00 Moscow time
     scheduler.add_job(
         send_daily_insight,
         CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
         id="daily_insight"
     )
-    
     scheduler.start()
     print("Scheduler started")
 
+
+# ---- ВАЖНО: при старте убираем webhook, чтобы polling был единственным способом получения апдейтов
+async def on_startup(dp):
+    try:
+        # в aiogram v2 достаточно просто удалить webhook
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("[startup] webhook removed, switching to long polling")
+    except Exception as e:
+        print(f"[startup] failed to delete webhook: {e}")
+
+
 if __name__ == "__main__":
-    # Create events.csv if it doesn't exist
+    # Создаём events.csv при первом запуске
     if not os.path.exists("events.csv"):
         with open("events.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["timestamp", "user_id", "event", "details"])
-    
+
+    # Поднимаем keep‑alive HTTP‑сервер для UptimeRobot/Render
     threading.Thread(target=_run_keepalive_forever, daemon=True).start()
 
     ensure_images()
     ensure_pdfs()
     setup_scheduler()
 
-    # Запускаем бота напрямую (без лишнего цикла)
-    executor.start_polling(dp, skip_updates=True)
+    # Запускаем бота ОДИН раз, без дополнительных циклов
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
