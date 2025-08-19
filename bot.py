@@ -474,15 +474,22 @@ async def daily_done_handler(callback: types.CallbackQuery):
     await callback.answer("🔥 Отлично! Задание дня выполнено.", show_alert=True)
 
 # ===================== BOT AUTO-RESTART =====================
-def _run_bot_polling():
-    while True:
-        try:
-            print("[bot] start_polling…", flush=True)
-            executor.start_polling(dp, skip_updates=True)
-            print("[bot] polling finished — restarting", flush=True)
-        except Exception as e:
-            print(f"[bot] polling crashed: {e}\n{traceback.format_exc()}", flush=True)
-            time.sleep(3)
+if __name__ == "__main__":
+    # Create events.csv if it doesn't exist
+    if not os.path.exists("events.csv"):
+        with open("events.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "user_id", "event", "details"])
+    
+    threading.Thread(target=_run_keepalive_forever, daemon=True).start()
+
+    ensure_images()
+    ensure_pdfs()
+    setup_scheduler()
+
+    print("[bot] start_polling…", flush=True)
+    executor.start_polling(dp, skip_updates=True)
+
 
 def setup_scheduler():
     """Setup the scheduler for daily insights"""
@@ -509,4 +516,4 @@ if __name__ == "__main__":
     ensure_pdfs()
     setup_scheduler()
 
-    _run_bot_polling()
+    
