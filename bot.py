@@ -318,36 +318,84 @@ def _run_keepalive_forever():
 
 # ===================== DAILY INSIGHTS =====================
 async def send_daily_insight():
+    """Send daily insight to subscribed users"""
     if not daily_subscribers:
         return
+
     insight = get_today_insight()
     text = f"🪄 Вопрос дня\n\n{insight}"
-    sent = 0
-    for uid in daily_subscribers.copy():
+
+    sent_count = 0
+    for user_id in daily_subscribers.copy():
         try:
-            await bot.send_message(uid, text)
-            sent += 1
+            await bot.send_message(user_id, text)
+            sent_count += 1
         except Exception as e:
-            print(f"[daily] to {uid}: {e}")
+            print(f"Failed to send daily insight to {user_id}: {e}")
             if "bot was blocked" in str(e).lower():
-                daily_subscribers.discard(uid)
-    print(f"[daily] sent: {sent}")
+                daily_subscribers.discard(user_id)
 
+    print(f"Daily insight sent to {sent_count} users")
+
+
+# ============== KEEP-ALIVE WEB SERVER (ОСТАВЛЯЕМ) ==============
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def _respond(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
+
+    def do_GET(self):  self._respond()
+    def do_HEAD(self): self._respond()
+    def log_message(self, format, *args): pass
+
+def _run_keepalive_forever():
+    while True:
+        try:
+            port = int(os.environ.get("PORT", 5000))
+            print(f"[keepalive] starting on 0.0.0.0:{port}", flush=True)
+            server = HTTPServer(("0.0.0.0", port), HealthHandler)
+            server.serve_forever()
+        except Exception as e:
+            print(f"[keepalive] crashed: {e}\n{traceback.format_exc()}", flush=True)
+            time.sleep(3)
+
+
+# ============== ПЛАНИРОВЩИК (ЕЖЕДНЕВКА) ==============
 def setup_scheduler():
-    scheduler.add_job(send_daily_insight, CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"), id="daily_insight")
+    scheduler.add_job(
+        send_daily_insight,
+        CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
+        id="daily_insight",
+        replace_existing=True
+    )
     scheduler.start()
-    print("[scheduler] started")
+    print("Scheduler started")
 
-# ===================== MAIN =====================
+
+# ===================== SINGLE ENTRY =====================
 if __name__ == "__main__":
+    # создаём events.csv при первом запуске
     if not os.path.exists("events.csv"):
         with open("events.csv", "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(["timestamp", "user_id", "event", "details"])
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "user_id", "event", "details"])
 
+    # поднимем keep-alive http-сервер в отдельном потоке (это ОК)
     threading.Thread(target=_run_keepalive_forever, daemon=True).start()
+
+    # подготовка ассетов
     ensure_images()
     ensure_pdfs()
+
+    # расписание ежедневной рассылки
     setup_scheduler()
 
-    # ВАЖНО: один единственный поллинг
+    # ВАЖНО: ОДИН-ЕДИНСТВЕННЫЙ запуск polling
+    print("[bot] start_polling (single instance)", flush=True)
     executor.start_polling(dp, skip_updates=True)
