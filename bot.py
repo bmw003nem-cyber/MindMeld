@@ -474,44 +474,32 @@ async def daily_done_handler(callback: types.CallbackQuery):
     await callback.answer("🔥 Отлично! Задание дня выполнено.", show_alert=True)
 
 # ===================== BOT AUTO-RESTART =====================
-# ---------- SCHEDULER ----------
+# (старую функцию _run_bot_polling мы убрали — она больше не нужна)
+
 def setup_scheduler():
-    """Запускаем ежедневную рассылку 'Вопрос дня' в 08:00 по Москве."""
-    try:
-        # если job уже существует — заменим
-        if scheduler.get_job("daily_insight"):
-            scheduler.remove_job("daily_insight")
+    """Setup the scheduler for daily insights"""
+    # Schedule daily insight at 8:00 Moscow time
+    scheduler.add_job(
+        send_daily_insight,
+        CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
+        id="daily_insight"
+    )
+    
+    scheduler.start()
+    print("Scheduler started")
 
-        scheduler.add_job(
-            send_daily_insight,
-            CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
-            id="daily_insight",
-            replace_existing=True,
-        )
-        scheduler.start()
-        print("[scheduler] started", flush=True)
-    except Exception as e:
-        print(f"[scheduler] failed: {e}", flush=True)
-
-
-# ---------- ENTRY POINT ----------
 if __name__ == "__main__":
-    # Создать events.csv при первом запуске
+    # Create events.csv if it doesn't exist
     if not os.path.exists("events.csv"):
         with open("events.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["timestamp", "user_id", "event", "details"])
-
-    # Поднимаем keep-alive HTTP-сервер
+    
     threading.Thread(target=_run_keepalive_forever, daemon=True).start()
 
-    # Проверяем, что статические файлы на месте
     ensure_images()
     ensure_pdfs()
-
-    # Запускаем планировщик
     setup_scheduler()
 
-    # Единственный экземпляр polling
-    print("[bot] start_polling…", flush=True)
+    # Запускаем бота напрямую (без лишнего цикла)
     executor.start_polling(dp, skip_updates=True)
