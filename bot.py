@@ -303,8 +303,7 @@ async def subscribe_daily(callback: types.CallbackQuery):
     kb.add(InlineKeyboardButton("❌ Отписаться от рассылки", callback_data="unsubscribe_daily"))
     kb.add(InlineKeyboardButton("← Назад", callback_data="back_main"))
     
-    today_insight = get_today_insight()
-    text = f"{INSIGHT_HEADER}\n\n{today_insight}"
+    text = get_today_content()
     await callback.message.edit_reply_markup(reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data == "unsubscribe_daily")
@@ -383,26 +382,96 @@ def _run_keepalive_forever():
             time.sleep(3)
 
 # ===================== DAILY INSIGHTS =====================
+# ВОПРОС ДНЯ + МИНИ-ЗАДАНИЯ + МИНИ-ТЕСТ + ПРОГРЕСС
+
+QUESTIONS = [
+    {
+        "question": "Что сегодня принесло тебе радость?",
+        "task": "Запиши 3 момента, за которые ты благодарен.",
+        "test": [
+            "Улыбнулся ли ты сегодня хотя бы 3 раза?",
+            "Сделал ли осознанную паузу на дыхание (1 мин)?",
+            "Сказал ли доброе слово другому человеку?"
+        ],
+    },
+    {
+        "question": "Какое твоё главное намерение на день?",
+        "task": "Выдели 10 минут на действие, которое ведёт к цели (даже самое маленькое).",
+        "test": [
+            "Сделал ли ты хотя бы 1 шаг к цели?",
+            "Отключил ли отвлекающие уведомления на 30–60 минут?",
+        ],
+    },
+    {
+        "question": "Где сегодня ты можешь проявить больше спокойствия?",
+        "task": "Потренируй «стоп-реакцию»: в момент раздражения — 3 глубоких вдоха, 3 медленных выдоха.",
+        "test": [
+            "Удалось ли тебе «поймать» автоматическую реакцию?",
+            "Получилось ли вернуть внимание в тело и замедлиться?",
+        ],
+    },
+    {
+        "question": "Что сейчас важнее — сделать идеально или просто сделать?",
+        "task": "Сделай задачу на 70% качества, но доведи до конца (ограничь время).",
+        "test": [
+            "Поставил ли ты лимит времени и уложился в него?",
+            "Сделал ли ты «как есть», не перепроверяя бесконечно?",
+        ],
+    },
+    {
+        "question": "Как ты можешь позаботиться о теле сегодня?",
+        "task": "Выбери 1: 15 минут ходьбы / стакан воды каждый час / отказ от сладкого до вечера.",
+        "test": [
+            "Был ли сегодня у тебя хотя бы 1 осознанный выбор для тела?",
+            "Как ты себя чувствуешь после этого выбора?",
+        ],
+    },
+]
+
+def _today_index() -> int:
+    return (datetime.now().timetuple().tm_yday - 1) % len(QUESTIONS)
+
+def get_today_content() -> str:
+    q = QUESTIONS[_today_index()]
+    text = f"🪄 Вопрос дня\n\n"
+    text += f"❓ {q['question']}\n\n"
+    text += f"📌 Мини-задание: {q['task']}"
+    if q.get("test"):
+        checks = "\n".join([f"• {item}" for item in q["test"]])
+        text += f"\n\n✅ Мини-тест:\n{checks}"
+    text += "\n\n📝 Можешь отправить ответ прямо сюда."
+    return text
+
 async def send_daily_insight():
-    """Send daily insight to subscribed users"""
     if not daily_subscribers:
         return
-    
-    insight = get_today_insight()
-    text = f"🪄 Вопрос дня\n\n{insight}"
-    
-    sent_count = 0
+    text = get_today_content()
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ Отметить выполнение", callback_data="daily_done"))
     for user_id in daily_subscribers.copy():
         try:
-            await bot.send_message(user_id, text)
-            sent_count += 1
+            await bot.send_message(user_id, text, reply_markup=kb)
         except Exception as e:
-            print(f"Failed to send daily insight to {user_id}: {e}")
-            # Remove user if bot was blocked
+            print(f"[daily] fail {user_id}: {e}")
             if "bot was blocked" in str(e).lower():
                 daily_subscribers.discard(user_id)
-    
-    print(f"Daily insight sent to {sent_count} users")
+    print(f"[daily] sent to {len(daily_subscribers)} users")
+
+# ===== Доп. обработчики для ответов =====
+@dp.message_handler(lambda m: m.from_user.id in daily_subscribers)
+async def daily_answer_handler(message: types.Message):
+    """Сохраняем текстовые ответы пользователей на вопросы дня"""
+    user_id = message.from_user.id
+    answer = message.text.strip()
+    log_event(user_id, "daily_answer", answer)
+    await message.answer("✍️ Спасибо за твой ответ! Я его учёл.")
+
+@dp.callback_query_handler(lambda c: c.data == "daily_done")
+async def daily_done_handler(callback: types.CallbackQuery):
+    """Фиксируем выполнение задания"""
+    user_id = callback.from_user.id
+    log_event(user_id, "daily_done")
+    await callback.answer("🔥 Отлично! Задание дня выполнено.", show_alert=True)
 
 # ===================== BOT AUTO-RESTART =====================
 def _run_bot_polling():
