@@ -1,20 +1,18 @@
 import os, json, csv
 from datetime import date
-from typing import List, Dict, Any
+from typing import List
 
 from aiogram import Bot
 from config import BOT_TOKEN, STATS_CSV, INSIGHTS_STORE, WELCOME_PHOTO, DONATION_QR, GUIDES
 
-# -------- Файлы / ассеты (проверка наличия) --------
-
+# -------- Ассеты (проверка наличия, ничего не создаём) --------
 def ensure_images():
-    # Просто логическая проверка — ничего не создаём
     for path in (WELCOME_PHOTO, DONATION_QR):
         if not os.path.exists(path):
             alt = f"assets/{os.path.basename(path)}"
             if os.path.exists(alt):
                 continue
-            print(f"[warn] file not found: {path} (это не критично)")
+            print(f"[warn] file not found: {path} (не критично)")
 
 def ensure_pdfs():
     for _, filename in GUIDES:
@@ -22,12 +20,10 @@ def ensure_pdfs():
             alt = f"guides/{filename}"
             if os.path.exists(alt):
                 continue
-            print(f"[warn] guide not found: {filename} (это не критично)")
+            print(f"[warn] guide not found: {filename} (не критично)")
 
 # -------- Инсайты (вопрос дня) --------
-
 def _default_insights() -> List[str]:
-    # Если файла нет — пробуем создать из дефолтного набора
     return [
         "Какие твои решения основаны на страхе?",
         "Что ты делаешь, когда никто не видит?",
@@ -64,8 +60,7 @@ def get_today_insight() -> str:
     return items[idx]
 
 # -------- Статистика / рассылка --------
-
-def _collect_user_ids_from_events() -> List[int]:
+def _collect_user_ids_from_events() -> list[int]:
     users = set()
     if not os.path.exists(STATS_CSV):
         return []
