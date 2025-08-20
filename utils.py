@@ -1,94 +1,74 @@
-# utils.py
 import os, json, csv
 from datetime import date
-from typing import List, Tuple, Set
+from typing import List, Dict, Any
 
-# Берём только то, что реально нужно
-from config import (
-    INSIGHTS_FILE,         # например: "insights.json"
-    STATS_CSV,             # например: "events.csv"
-    WELCOME_PHOTO,         # например: "assets/welcome.jpg"
-    DONATION_QR,           # например: "assets/donation_qr.png"
-    GUIDES,                # список кортежей [(title, filename), ...]
-)
+from aiogram import Bot
+from config import BOT_TOKEN, STATS_CSV, INSIGHTS_STORE, WELCOME_PHOTO, DONATION_QR, GUIDES
 
-# ---------- Инсайты / Вопрос дня ----------
+# -------- Файлы / ассеты (проверка наличия) --------
+
+def ensure_images():
+    # Просто логическая проверка — ничего не создаём
+    for path in (WELCOME_PHOTO, DONATION_QR):
+        if not os.path.exists(path):
+            alt = f"assets/{os.path.basename(path)}"
+            if os.path.exists(alt):
+                continue
+            print(f"[warn] file not found: {path} (это не критично)")
+
+def ensure_pdfs():
+    for _, filename in GUIDES:
+        if not os.path.exists(filename):
+            alt = f"guides/{filename}"
+            if os.path.exists(alt):
+                continue
+            print(f"[warn] guide not found: {filename} (это не критично)")
+
+# -------- Инсайты (вопрос дня) --------
 
 def _default_insights() -> List[str]:
-    # Можно расширить в любое время
+    # Если файла нет — пробуем создать из дефолтного набора
     return [
+        "Какие твои решения основаны на страхе?",
         "Что ты делаешь, когда никто не видит?",
-        "Какое маленькое действие ты давно откладываешь — и можешь сделать сегодня?",
-        "Где ты сейчас выбираешь страх вместо роста?",
-        "Что в твоей жизни просит честности именно сейчас?",
-        "Как выглядит твоя идеальная утренняя рутина? Что можешь добавить уже завтра?",
-        "Какую одну мысль пора отпустить?",
-        "Если бы ты доверился себе на 100%, какой был бы следующий шаг?",
-        "Где ты говоришь «да», когда хочется сказать «нет»?",
-        "Какое простое действие вернёт тебе энергию сегодня?",
-        "Что важно тебе — помимо доказательств другим?",
+        "Что из того, что ты откладывал, стоит сделать сегодня?",
+        "Где ты делаешь «как надо», а не «как честно»?",
+        "Если убрать чувство вины — что решишь иначе?",
+        "Что сейчас просит твоего внимания больше всего?",
+        "Какое маленькое действие приблизит тебя к большому?",
     ]
 
 def load_insights() -> List[str]:
-    """Читает список вопросов/инсайтов из INSIGHTS_FILE, при отсутствии создаёт файл по умолчанию."""
-    if not os.path.exists(INSIGHTS_FILE):
-        insights = _default_insights()
+    if os.path.exists(INSIGHTS_STORE):
         try:
-            with open(INSIGHTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(insights, f, ensure_ascii=False, indent=2)
+            with open(INSIGHTS_STORE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and all(isinstance(x, str) for x in data):
+                    return data
         except Exception as e:
-            print(f"[insights] cannot create {INSIGHTS_FILE}: {e}")
-        return insights
-
+            print(f"[insights] read error: {e}")
+    # создаём файл с дефолтными вопросами
+    data = _default_insights()
     try:
-        with open(INSIGHTS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list) or not data:
-            raise ValueError("insights is empty or not a list")
-        return [str(x) for x in data]
+        with open(INSIGHTS_STORE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[insights] failed to load {INSIGHTS_FILE}: {e}")
-        return _default_insights()
+        print(f"[insights] write default error: {e}")
+    return data
 
 def get_today_insight() -> str:
-    """Детерминированно выбирает инсайт по сегодняшней дате."""
-    insights = load_insights()
-    if not insights:
-        insights = _default_insights()
-    idx = date.today().toordinal() % len(insights)
-    return insights[idx]
+    items = load_insights()
+    if not items:
+        items = _default_insights()
+    idx = (date.today().toordinal()) % len(items)
+    return items[idx]
 
-# ---------- Проверки статики (без генерации!) ----------
+# -------- Статистика / рассылка --------
 
-def ensure_images():
-    """Проверяет наличие картинок. Если нет — просто предупреждаем в логах."""
-    for path in [WELCOME_PHOTO, DONATION_QR]:
-        if not path:
-            continue
-        if not os.path.exists(path):
-            # пробуем в assets/
-            alt = os.path.join("assets", os.path.basename(path))
-            if os.path.exists(alt):
-                continue
-            print(f"[assets] WARN: image not found: {path}")
-
-def ensure_pdfs():
-    """Проверяет наличие PDF в проекте. Ничего не генерируем."""
-    for title, filename in GUIDES:
-        # пробуем в папке guides/
-        p1 = os.path.join("guides", filename)
-        p2 = filename  # возможно лежит в корне
-        if os.path.exists(p1) or os.path.exists(p2):
-            continue
-        print(f"[guides] WARN: PDF not found for guide '{title}': expected '{p1}' or '{p2}'")
-
-# ---------- Статистика и рассылка ----------
-
-def _read_user_ids_from_stats() -> Set[int]:
-    """Возвращает набор user_id из CSV-логов событий."""
+def _collect_user_ids_from_events() -> List[int]:
     users = set()
     if not os.path.exists(STATS_CSV):
-        return users
+        return []
     try:
         with open(STATS_CSV, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
@@ -96,35 +76,46 @@ def _read_user_ids_from_stats() -> Set[int]:
             for row in reader:
                 if len(row) >= 2:
                     try:
-                        users.add(int(row[1]))
-                    except Exception:
+                        uid = int(row[1])
+                        users.add(uid)
+                    except:
                         pass
     except Exception as e:
         print(f"[stats] read error: {e}")
-    return users
+    return sorted(users)
 
 def get_stats() -> str:
-    """Простая статистика для /stats."""
-    users = _read_user_ids_from_stats()
-    total_events = 0
+    total_users = len(_collect_user_ids_from_events())
+    starts = downloads = subs = unsubs = 0
     if os.path.exists(STATS_CSV):
-        try:
-            with open(STATS_CSV, "r", encoding="utf-8") as f:
-                total_events = max(0, sum(1 for _ in f) - 1)
-        except Exception:
-            pass
-    return f"Пользователей: {len(users)}\nСобытий: {total_events}"
+        with open(STATS_CSV, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for _, _, event, _ in reader:
+                if event == "start": starts += 1
+                elif event == "guide_download": downloads += 1
+                elif event == "daily_subscribe": subs += 1
+                elif event == "daily_unsubscribe": unsubs += 1
+    return (
+        f"Пользователей (по событиям): {total_users}\n"
+        f"Стартов: {starts}\n"
+        f"Скачиваний гайдов: {downloads}\n"
+        f"Подписок на «Вопрос дня»: {subs}\n"
+        f"Отписок: {unsubs}"
+    )
 
-async def broadcast_message(bot, text: str) -> int:
-    """Рассылка по всем user_id, встречавшимся в events.csv."""
-    users = _read_user_ids_from_stats()
+async def broadcast_message(text: str) -> int:
+    """Простая рассылка по всем user_id, встреченным в events.csv."""
+    ids = _collect_user_ids_from_events()
+    if not ids:
+        return 0
+    bot = Bot(token=BOT_TOKEN)
     sent = 0
-    for uid in users:
+    for uid in ids:
         try:
             await bot.send_message(uid, text)
             sent += 1
         except Exception as e:
-            # не падаем из‑за одного пользователя
-            print(f"[broadcast] failed to {uid}: {e}")
+            print(f"[broadcast] fail to {uid}: {e}")
+    await bot.session.close()
     return sent
-
