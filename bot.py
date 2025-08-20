@@ -1,14 +1,12 @@
 # ========================  BOT  ============================
 import os
-import json
-import asyncio
+import csv
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, InputFile
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 from aiogram.utils import executor
 
 from config import (
@@ -28,8 +26,39 @@ from config import (
 bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot)
 
-# ======================  КНОПКИ  ===========================
+EVENTS_CSV = "events.csv"
+users_with_guide = set()  # user_id, которые уже получили один гайд
 
+# ======================  УТИЛИТЫ  ==========================
+def log_event(user_id: int, event: str, details: str = ""):
+    row = [datetime.now().isoformat(timespec="seconds"), str(user_id), event, details]
+    new_file = not os.path.exists(EVENTS_CSV)
+    with open(EVENTS_CSV, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(["timestamp", "user_id", "event", "details"])
+        w.writerow(row)
+
+def restore_guide_state():
+    if not os.path.exists(EVENTS_CSV):
+        return
+    try:
+        with open(EVENTS_CSV, "r", encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                if row.get("event") == "guide_sent":
+                    users_with_guide.add(int(row.get("user_id", "0") or "0"))
+    except Exception:
+        pass
+
+async def is_user_subscribed(user_id: int) -> bool:
+    try:
+        m = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return m.status in ("member", "administrator", "creator")
+    except Exception:
+        return False
+
+# ======================  КНОПКИ  ===========================
 def back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton(BTN_BACK, callback_data="menu"))
@@ -85,8 +114,8 @@ def qod_kb() -> InlineKeyboardMarkup:
     return kb
 
 MINI_TASKS = [
-    "Запиши один шаг, который займёт ≤10 минут, и сделай его прямо сегодня.",
-    "Зафиксируй 3 выгоды, которые придут после действия. Вернись к ним вечером.",
+    "Запиши один шаг, который займёт ≤10 минут, и сделай его сегодня.",
+    "Запиши 3 выгоды, которые получишь после действия. Вернись к списку вечером.",
     "Спроси себя: «Что самое маленькое я могу сделать за 5 минут?» — и сделай это.",
     "Выбери новое убеждение-вопрос: «А если получится? Что будет дальше?»",
 ]
@@ -94,7 +123,6 @@ MINI_TASKS = [
 # ==================  /start и главное меню  =================
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
-    # Пытаемся прислать привет-фото
     if os.path.exists(WELCOME_PHOTO):
         try:
             await message.answer_photo(
@@ -105,13 +133,10 @@ async def cmd_start(message: types.Message):
             return
         except Exception:
             pass
-    # Если нет фото или не отправилось – просто текст
     await message.answer(START_TEXT, reply_markup=main_menu_kb())
 
-# -------------------- навигация в меню ---------------------
 @dp.callback_query_handler(lambda c: c.data == "menu")
 async def cb_menu(call: types.CallbackQuery):
-    await call.message.edit_reply_markup()  # убираем старые кнопки
     await call.message.answer("Главное меню:", reply_markup=main_menu_kb())
     await call.answer()
 
@@ -130,23 +155,78 @@ async def cb_consult(call: types.CallbackQuery):
 # =========================  Гайды  ==========================
 @dp.callback_query_handler(lambda c: c.data == "guides")
 async def cb_guides(call: types.CallbackQuery):
-    await call.message.answer("Выбери гайд:", reply_markup=guides_menu_kb())
+    uid = call.from_user.id
+    # проверка подписки
+    if not await is_user_subscribed(uid):
+        text = (
+            f"{SUBSCRIBE_TEXT}\n\n"
+            f"⚠️ Выдача гайда доступна только после подписки на канал."
+        )
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton(BTN_SUBSCRIBE, url=SUBSCRIBE_URL))
+        kb.add(InlineKeyboardButton(BTN_BACK, callback_data="menu"))
+        await call.message.answer(text, reply_markup=kb)
+        await call.answer()
+        return
+
+    # уже получал гайд
+    if uid in users_with_guide:
+        await call.message.answer(
+            "Ты уже получал свой гайд. 🔒 Повторная выдача не предусмотрена.",
+            reply_markup=back_kb()
+        )
+        await call.answer()
+        return
+
+    await call.message.answer(
+        "Выбери один гайд.\n\n<b>⚠️ Важно:</b> можно получить только <b>один</b> гайд.",
+        reply_markup=guides_menu_kb()
+    )
     await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("guide:"))
 async def cb_guide_download(call: types.CallbackQuery):
+    uid = call.from_user.id
+
+    # подстрахуемся — повторные запросы/гонки
+    if uid in users_with_guide:
+        await call.message.answer(
+            "Уже зафиксировано получение одного гайда. Повторная выдача недоступна.",
+            reply_markup=back_kb()
+        )
+        await call.answer()
+        return
+
+    if not await is_user_subscribed(uid):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton(BTN_SUBSCRIBE, url=SUBSCRIBE_URL))
+        kb.add(InlineKeyboardButton(BTN_BACK, callback_data="menu"))
+        await call.message.answer(
+            "Подписка не подтверждена. Нажми «Подписаться», затем вернись в меню.",
+            reply_markup=kb
+        )
+        await call.answer()
+        return
+
     idx = int(call.data.split(":")[1])
     title, filename = GUIDES[idx]
     if not os.path.exists(filename):
-        await call.message.answer(f"Файл <b>{filename}</b> не найден в репозитории.", reply_markup=back_kb())
+        await call.message.answer(
+            f"Файл <b>{filename}</b> не найден.",
+            reply_markup=back_kb()
+        )
         await call.answer()
         return
+
+    # отправляем, фиксируем, больше не позволяем
     try:
         await call.message.answer_document(
-            document=InputFile(filename),
+            InputFile(filename),
             caption=f"«{title}»",
             reply_markup=back_kb()
         )
+        users_with_guide.add(uid)
+        log_event(uid, "guide_sent", filename)
     except Exception as e:
         await call.message.answer(f"Не удалось отправить файл: {e}", reply_markup=back_kb())
     await call.answer()
@@ -187,11 +267,6 @@ async def cb_support(call: types.CallbackQuery):
     await call.message.answer(SUPPORT_TEXT, reply_markup=back_kb())
     await call.answer()
 
-# =====================  Подписка / Связаться  ===============
-@dp.message_handler(commands=["contact"])
-async def cmd_contact(message: types.Message):
-    await message.answer(CONTACT_TEXT, reply_markup=back_kb())
-
 # ===================  Keep‑Alive веб‑сервер  ================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -200,22 +275,22 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
 
-    def log_message(self, format, *args):
-        # подавляем дефолтный лог HTTP‑сервера
+    def log_message(self, *args):
         return
 
 def run_keepalive():
     port = int(os.environ.get("PORT", "10000"))
-    httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
-    try:
-        httpd.serve_forever()
-    except Exception:
-        pass
+    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
 
 # ========================  START  ===========================
-if __name__ == "__main__":
-    # отдельный поток «health» для Render, чтобы не ловить port scan timeout
-    Thread(target=run_keepalive, daemon=True).start()
+async def on_startup(_):
+    # Снимаем вебхук, чтобы точно был ТОЛЬКО long polling
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
+    restore_guide_state()
 
-    # запуск бота
-    executor.start_polling(dp, skip_updates=True)
+if __name__ == "__main__":
+    Thread(target=run_keepalive, daemon=True).start()
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
