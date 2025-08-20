@@ -1,291 +1,330 @@
-# bot.py — версия с daily 2.0 (вопрос + мини‑задание + ответы кнопками), с прогрессом на диске
+# -*- coding: utf-8 -*-
+"""
+MindMeld — бот с «Вопросом дня 2.0»
+- /start — приветствие + меню
+- Кнопка «Вопрос дня» — вопрос с вариантами ответа
+- После ответа — мини‑задание на день
+- Логирование всех ответов в events.csv
+- Подписка на ежедневную рассылку вопроса
+- Keep-alive веб‑сервер (Render ждёт открытый порт)
+- Автоперезапуск polling при сетевых сбоях
+"""
 
-import os, json, time, asyncio, csv, base64
+import os
+import csv
+import json
+import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, date
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile, ReplyKeyboardRemove, ForceReply
 from aiogram.utils import executor
-from aiogram.dispatcher.filters import Text
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# ===================== CONFIG =====================
-from config import (
-    BOT_TOKEN, ADMIN_ID, CHANNEL_USERNAME,
-    WELCOME_PHOTO, DONATION_QR,
-    WELCOME_TEXT, MENTORING_TEXT, CONSULT_TEXT, GUIDES_INTRO,
-    REVIEWS_TEXT, DONATE_TEXT, CONTACT_TEXT, INSIGHT_HEADER
-)
+# ===================== КОНФИГ =====================
 
-# ===================== PATHS =====================
-BASE_DIR = Path(__file__).resolve().parent
-ASSETS = BASE_DIR / "assets"
-DATA = BASE_DIR / "data"
-DATA.mkdir(exist_ok=True)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    raise SystemExit("❌ BOT_TOKEN пуст. Задай его в переменных окружения Render.")
 
-INSIGHTS_JSON = ASSETS / "insights.json"   # старый список вопросов/инсайтов
-DAILY_STATE_JSON = DATA / "daily_state.json"
+# Папка с ассетами (картинки приветствия/QR и т.д.)
+ASSETS_DIR = "assets"
+WELCOME_PHOTO = os.path.join(ASSETS_DIR, "welcome.jpg.jpg")  # как у тебя в репо
+DONATION_QR = os.path.join(ASSETS_DIR, "donation_qr.png")
 
-STATS_CSV = BASE_DIR / "events.csv"
+# Канал (если есть проверка подписки — можно подключить позже)
+CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"
 
-# ===================== BOT CORE =====================
-bot = Bot(BOT_TOKEN, parse_mode="HTML")
-dp = Dispatcher(bot)
-scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+# Файл логов
+EVENTS_CSV = "events.csv"
 
-awaiting_application = {}
-awaiting_insight_reply = {}
+# Хранилище подписчиков рассылки (на примитиве; можно заменить на файл/БД)
+daily_subscribers = set()
 
-# ===================== HELPERS =====================
-def log_event(user_id: int, event: str):
-    try:
-        with open(STATS_CSV, "a", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            if f.tell() == 0:
-                w.writerow(["ts", "user_id", "event"])
-            w.writerow([datetime.now().isoformat(), user_id, event])
-    except Exception as e:
-        print("log_event error:", e)
+# ===================== КОНТЕНТ «ВОПРОС ДНЯ 2.0» =====================
 
-async def is_subscribed(user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ("member", "administrator", "creator")
-    except Exception:
-        return False
-
-def load_json(path: Path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
-
-def save_json(path: Path, obj):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print("save_json error:", e)
-
-# ===================== DAILY 2.0 =====================
-# Храним прогресс: { "user_id": {"day": int, "streak": int, "last_id": int, "last_ts": epoch } }
-STATE = load_json(DAILY_STATE_JSON, {})
-
-DAILY_FLOW = [
+# Каждый вопрос: {text, options, tasks}
+# options — список вариантов; tasks — словарь {index->текст мини‑задания}
+QUESTIONS = [
     {
-        "id": 1,
-        "question": "Удалось ли сегодня уделить 5 минут себе (тишина/дыхание/прогулка)?",
-        "answers": ["Да", "Частично", "Нет"],
-        "task_yes": "Закрепи результат: 3 минуты тишины перед сном, 10 спокойных вдохов-выдохов.",
-        "task_mid": "Сделай сейчас 60 секунд паузы: закрой глаза, расслабь плечи, 10 ровных вдохов.",
-        "task_no":  "Выдели 2 минуты. Ровно дыши. Затем одно слово о состоянии.",
-        "test": "Какое ощущение после мини‑практики?",
-        "test_options": ["Больше энергии", "Спокойнее", "Без изменений"]
+        "text": "Что сегодня для тебя важнее всего?",
+        "options": ["Сделать шаг к цели", "Позаботиться о теле", "Спокойный день", "Общение с близкими"],
+        "tasks": {
+            0: "Выбери одно действие, которое реально продвинет тебя к цели, и сделай его до вечера.",
+            1: "Сделай 20‑минутную прогулку или разминку + 2 стакана воды.",
+            2: "Сделай 10‑минутную дыхательную практику перед сном.",
+            3: "Напиши одному важному человеку тёплое сообщение/встречу."
+        }
     },
     {
-        "id": 2,
-        "question": "Сделал(а) ли ты сегодня один маленький шаг к важной цели?",
-        "answers": ["Да", "Немного", "Нет"],
-        "task_yes": "Запиши 1 мысль/навык, который помог. Это твой рабочий инструмент.",
-        "task_mid": "Сделай микрошаг 3–5 минут: 3 строки текста, 1 звонок, черновик файла.",
-        "task_no":  "Определи самый маленький шаг (до 3 минут) и поставь в календарь на сегодня.",
-        "test": "Что чувствуешь после шага?",
-        "test_options": ["Уверенность", "Облегчение", "Сопротивление"]
+        "text": "Какая мысль чаще всего тормозит тебя?",
+        "options": ["«Я не успею»", "«Не идеально — не делать»", "«Что скажут другие?»", "«Я потом»"],
+        "tasks": {
+            0: "Выдели 25 минут на приоритет и отключи уведомления (техника Pomodoro).",
+            1: "Сделай мини‑результат за 30 минут. Не идеально — но сделай.",
+            2: "Сделай маленькое действие тихо для себя. Никаких отчётов другим.",
+            3: "Выбери одно дело и сделай его прямо сейчас в течение 10 минут."
+        }
     },
     {
-        "id": 3,
-        "question": "Удалось ли сегодня не залипать в ленте соцсетей?",
-        "answers": ["Да", "Старался", "Нет"],
-        "task_yes": "Награди себя 5 минутами любимого дела без экрана.",
-        "task_mid": "Таймер 15 минут, телефон в другой комнате. Сделай 1 важное дело.",
-        "task_no":  "На 10 минут убери телефон из вида и сфокусируйся на одной задаче.",
-        "test": "Как результат маленького детокса?",
-        "test_options": ["Концентрация ↑", "Спокойнее", "Пока рано говорить"]
+        "text": "Где сейчас больше всего энергии?",
+        "options": ["Тело", "Дело/работа", "Отношения", "Тишина/одиночество"],
+        "tasks": {
+            0: "Сделай 30 приседаний/отжиманий/тягу резинки — что угодно на 10 минут.",
+            1: "Определи 1 ключевую задачу и сделай первый шаг (≤15 минут).",
+            2: "Назначь встречу/звонок/совместное дело с важным человеком.",
+            3: "Выключи всё на 20 минут и побудь в тишине. Без телефона."
+        }
     },
-    {
-        "id": 4,
-        "question": "Был ли сегодня момент, когда ты осознанно выбрал спокойствие вместо спора?",
-        "answers": ["Да", "Иногда", "Нет"],
-        "task_yes": "Отметь 1 внутреннюю опору, которая помогла сохранить спокойствие.",
-        "task_mid": "В следующий спор — пауза 10 секунд, затем короткая фраза без обвинений.",
-        "task_no":  "Один спор — перепиши мысленно как конструктивный диалог (2–3 фразы).",
-        "test": "Что внутри после практики?",
-        "test_options": ["Спокойнее", "Прояснение", "Без изменений"]
-    },
-    {
-        "id": 5,
-        "question": "Удалось ли сегодня лечь спать вовремя (±30 минут от цели)?",
-        "answers": ["Да", "Почти", "Нет"],
-        "task_yes": "Микронаграда: 5 минут приятного чтения без экрана.",
-        "task_mid": "Сегодня — экран за 40 минут до сна в сторону, вода, тихий свет.",
-        "task_no":  "Поставь время «в постели» на 10 минут раньше, чем обычно.",
-        "test": "Как самочувствие сейчас?",
-        "test_options": ["Бодрее", "Ок", "Хочется спать"]
-    },
-    {
-        "id": 6,
-        "question": "Удалось ли сегодня сделать паузу перед «автоматическим» действием (еда/лента/реакция)?",
-        "answers": ["Да", "Иногда", "Нет"],
-        "task_yes": "Укрепи навык: завтра повтори в другом триггере.",
-        "task_mid": "Отметь 1 триггер и заранее придумай короткую альтернативу (вода/дыхание).",
-        "task_no":  "Сегодня — одна пауза на 15 секунд перед любым автоматизмом.",
-        "test": "Что поменялось?",
-        "test_options": ["Сознательность", "Больше контроля", "Ничего"]
-    },
-    {
-        "id": 7,
-        "question": "Удалось ли сделать что-то «для будущего себя» (порядок, список, подготовка)?",
-        "answers": ["Да", "Немного", "Нет"],
-        "task_yes": "Запиши, что сработало, и повтори через день.",
-        "task_mid": "Добавь одну вещь для «завтрашнего себя» (в сумке/на столе/в списке).",
-        "task_no":  "Прямо сейчас: 2‑минутное действие, которое завтра сэкономит 10 минут.",
-        "test": "Как ощущение после заботы о будущем себе?",
-        "test_options": ["Уверенность", "Спокойствие", "Пока нейтрально"]
-    }
+    # Добавишь свои вопросы по аналогии…
 ]
 
-def _user(uid: int):
-    suid = str(uid)
-    if suid not in STATE:
-        STATE[suid] = {"day": 0, "streak": 0, "last_id": 0, "last_ts": 0}
-    return STATE[suid]
 
-def _save_state():
-    save_json(DAILY_STATE_JSON, STATE)
+# ===================== УТИЛИТЫ =====================
 
-def _by_id(qid: int):
-    for d in DAILY_FLOW:
-        if d["id"] == qid:
-            return d
-    return DAILY_FLOW[0]
+def ensure_events_csv():
+    if not os.path.exists(EVENTS_CSV):
+        with open(EVENTS_CSV, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "user_id", "event", "details"])
 
-def kb_daily_answers(qid: int, answers):
-    kb = InlineKeyboardMarkup()
-    for a in answers:
-        kb.add(InlineKeyboardButton(a, callback_data=f"dqa:{qid}:{a}"))
-    return kb
+def log_event(user_id: int, event: str, details: str = ""):
+    ensure_events_csv()
+    with open(EVENTS_CSV, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([datetime.now().isoformat(timespec="seconds"), user_id, event, details])
 
-def kb_daily_test(qid: int, options):
-    kb = InlineKeyboardMarkup()
-    for o in options:
-        kb.add(InlineKeyboardButton(o, callback_data=f"dqt:{qid}:{o}"))
-    return kb
+def day_index() -> int:
+    """Стабильный индекс на день (чтобы у всех был один и тот же вопрос)"""
+    return (date.today().toordinal()) % len(QUESTIONS)
 
-async def daily_send_question(chat, uid: int):
-    u = _user(uid)
-    next_id = (u["day"] % len(DAILY_FLOW)) + 1
-    d = _by_id(next_id)
-    u["last_id"] = d["id"]; _save_state()
+# ===================== БОТ =====================
 
-    text = f"📌 <b>Вопрос дня</b> ({d['id']}/{len(DAILY_FLOW)})\n\n{d['question']}"
-    await bot.send_message(chat, text, reply_markup=kb_daily_answers(d["id"], d["answers"]), parse_mode="HTML")
+bot = Bot(BOT_TOKEN, parse_mode=types.ParseMode.HTML)
+dp = Dispatcher(bot)
 
-@dp.message_handler(commands=["daily"])
-async def cmd_daily(m: types.Message):
-    await daily_send_question(m.chat.id, m.from_user.id)
-
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("dqa:"))
-async def daily_answer_cb(c: types.CallbackQuery):
-    _, qid, answer = c.data.split(":", 2)
-    qid = int(qid)
-    d = _by_id(qid)
-
-    if answer == d["answers"][0]:
-        task = d["task_yes"]
-    elif answer == d["answers"][1]:
-        task = d["task_mid"]
-    else:
-        task = d["task_no"]
-
-    await c.message.answer(f"🎯 Мини‑задание\n{task}\n\nКогда сделаешь — отметь состояние:")
-    await c.message.answer(d["test"], reply_markup=kb_daily_test(d["id"], d["test_options"]))
-    await c.answer()
-
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("dqt:"))
-async def daily_test_cb(c: types.CallbackQuery):
-    _, qid, result = c.data.split(":", 2)
-    qid = int(qid)
-    uid = c.from_user.id
-    u = _user(uid)
-
-    if u.get("last_id") == qid:
-        u["day"] = (u["day"] % len(DAILY_FLOW)) + 1
-        u["streak"] = u.get("streak", 0) + 1
-        u["last_ts"] = int(time.time())
-        _save_state()
-        await c.message.answer(f"✅ Засчитано! Текущая серия: {u['streak']} дней.\nПриходи завтра → /daily")
-    else:
-        await c.message.answer("Отметь результат по текущему вопросу /daily.")
-    await c.answer()
-
-@dp.message_handler(commands=["progress"])
-async def progress_cmd(m: types.Message):
-    u = _user(m.from_user.id)
-    await m.answer(f"📊 Прогресс\nДень: {max(1,u['day'])}/{len(DAILY_FLOW)}\nСерия: {u['streak']} дней")
-
-# ===================== MAIN MENU =====================
-def main_menu():
+# ---------- Клавиатуры ----------
+def main_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("Наставничество", callback_data="menu_mentoring"),
-        InlineKeyboardButton("Консультация",  callback_data="menu_consult"),
-        InlineKeyboardButton("Гайды",         callback_data="menu_guides"),
-        InlineKeyboardButton("Отзывы",        callback_data="menu_reviews"),
-        InlineKeyboardButton("Донат",         callback_data="menu_donate"),
-        InlineKeyboardButton("Связаться",     callback_data="menu_contact"),
-        InlineKeyboardButton("Вопрос дня+",   callback_data="go_daily")
+        InlineKeyboardButton("🧠 Вопрос дня", callback_data="menu:qod"),
+        InlineKeyboardButton("🔔 Подписаться на рассылку", callback_data="menu:sub"),
+    )
+    kb.add(
+        InlineKeyboardButton("📩 Отписаться", callback_data="menu:unsub"),
+        InlineKeyboardButton("📕 Наставничество", callback_data="menu:mentoring"),
+    )
+    kb.add(
+        InlineKeyboardButton("💬 Отзывы", url="https://t.me/your_reviews_link"),
+        InlineKeyboardButton("❤️ Поддержать", callback_data="menu:donate"),
     )
     return kb
 
-@dp.callback_query_handler(Text(equals="go_daily"))
-async def open_daily(c: types.CallbackQuery):
-    await daily_send_question(c.message.chat.id, c.from_user.id); await c.answer()
+def question_keyboard(q_idx: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=1)
+    for i, opt in enumerate(QUESTIONS[q_idx]["options"]):
+        kb.add(InlineKeyboardButton(f"• {opt}", callback_data=f"q:{q_idx}:{i}"))
+    return kb
 
-# ===================== EXISTING HANDLERS =====================
-# оставляем твои прежние хендлеры меню и логики — они подтягиваются из handlers.py
-from handlers import register_handlers
-register_handlers(dp, bot, ADMIN_ID, CHANNEL_USERNAME, WELCOME_PHOTO, DONATION_QR,
-                  WELCOME_TEXT, MENTORING_TEXT, CONSULT_TEXT, GUIDES_INTRO,
-                  REVIEWS_TEXT, DONATE_TEXT, CONTACT_TEXT, INSIGHT_HEADER, ASSETS, log_event, is_subscribed)
-
-# ===================== SCHEDULER =====================
-async def send_daily_prompt():
-    # мягкое напоминание вечером
-    # если у тебя есть список подписчиков, замени на свой набор user_id
-    try:
-        subs = set()  # заполни при желании
-        for uid in subs:
-            try:
-                await bot.send_message(uid, "Напоминание: загляни в «Вопрос дня» → /daily 🌿")
-            except Exception:
-                pass
-    except Exception as e:
-        print("send_daily_prompt error:", e)
-
-def setup_scheduler():
-    try:
-        for job in scheduler.get_jobs(): scheduler.remove_job(job.id)
-    except Exception:
-        pass
-    scheduler.add_job(send_daily_prompt, CronTrigger(hour=19, minute=0))
-    if not scheduler.running:
-        scheduler.start()
-
-# ===================== START =====================
+# ---------- Приветствие ----------
 @dp.message_handler(commands=["start"])
-async def start_cmd(m: types.Message):
-    try:
-        if WELCOME_PHOTO and Path(WELCOME_PHOTO).exists():
-            await bot.send_photo(m.chat.id, InputFile(WELCOME_PHOTO), caption=WELCOME_TEXT, reply_markup=main_menu())
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    log_event(user_id, "start", "user started bot")
+    text = (
+        "Привет, рад видеть тебя в пространстве!\n\n"
+        "Здесь — инструменты для ясности, энергии и действий без выгорания.\n"
+        "Начни с <b>Вопроса дня</b> — один клик, и у тебя есть фокус + мини‑задание на сегодня."
+    )
+    if os.path.exists(WELCOME_PHOTO):
+        try:
+            with open(WELCOME_PHOTO, "rb") as p:
+                await message.answer_photo(p, caption=text, reply_markup=main_menu())
+        except Exception:
+            await message.answer(text, reply_markup=main_menu())
+    else:
+        await message.answer(text, reply_markup=main_menu())
+
+# ---------- Меню ----------
+@dp.callback_query_handler(lambda c: c.data.startswith("menu:"))
+async def on_menu(call: types.CallbackQuery):
+    await call.answer()
+    user_id = call.from_user.id
+    action = call.data.split(":", 1)[1]
+
+    if action == "qod":
+        await send_question(call.message.chat.id)
+        return
+
+    if action == "sub":
+        daily_subscribers.add(user_id)
+        log_event(user_id, "subscribe_daily")
+        await call.message.answer("🔔 Подписка на ежедневную рассылку включена. "
+                                  "Каждое утро ты будешь получать «Вопрос дня».")
+        return
+
+    if action == "unsub":
+        daily_subscribers.discard(user_id)
+        log_event(user_id, "unsubscribe_daily")
+        await call.message.answer("🔕 Отписал от рассылки «Вопрос дня».")
+        return
+
+    if action == "mentoring":
+        await call.message.answer(MENTORING_TEXT, reply_markup=mentoring_menu())
+        return
+
+    if action == "donate":
+        if os.path.exists(DONATION_QR):
+            with open(DONATION_QR, "rb") as q:
+                await call.message.answer_photo(q, caption=DONATE_TEXT)
         else:
-            await m.answer(WELCOME_TEXT, reply_markup=main_menu())
-    except Exception:
-        await m.answer(WELCOME_TEXT, reply_markup=main_menu())
-    log_event(m.from_user.id, "start")
+            await call.message.answer(DONATE_TEXT)
+        return
+
+# ---------- Отправка вопроса ----------
+async def send_question(chat_id: int):
+    idx = day_index()
+    q = QUESTIONS[idx]
+    text = f"🧠 <b>Вопрос дня</b>\n\n{q['text']}\n\nВыбери вариант:"
+    await bot.send_message(chat_id, text, reply_markup=question_keyboard(idx))
+
+# ---------- Обработка ответа ----------
+@dp.callback_query_handler(lambda c: c.data.startswith("q:"))
+async def on_answer(call: types.CallbackQuery):
+    await call.answer()
+    user_id = call.from_user.id
+    _, s_idx, s_opt = call.data.split(":")
+    idx = int(s_idx)
+    opt = int(s_opt)
+    q = QUESTIONS[idx]
+    choice = q["options"][opt]
+    task = q["tasks"].get(opt, "Сделай один малый шаг, который приблизит тебя к важному.")
+
+    # лог
+    log_event(user_id, "qod_answer", json.dumps({"q_idx": idx, "option": opt, "choice": choice}, ensure_ascii=False))
+
+    # подтверждение + мини‑задание
+    await call.message.answer(
+        f"✅ <b>Записал!</b> Ты выбрал: «{choice}».\n\n"
+        f"🔥 <b>Мини‑задание на сегодня:</b>\n{task}\n\n"
+        "Можешь вернуться к меню или подождать следующего вопроса завтра.",
+        reply_markup=main_menu()
+    )
+
+# ---------- Наставничество ----------
+MENTORING_TEXT = (
+    "<b>Наставничество — твой путь к себе и жизни на 100%</b>\n\n"
+    "Это не курс и не вебинар. Это твоя личная трансформация, где мы смотрим не на один кусочек, "
+    "а на всю жизнь целиком: тело и энергию, мышление и режим, окружение, внутреннюю опору и твоё предназначение.\n\n"
+    "📌 <b>Как устроено наставничество:</b>\n"
+    "• 4 недели — 14 тем;\n"
+    "• задания каждые 2 дня, чтобы прожить и закрепить изменения;\n"
+    "• закрытый Telegram-канал со всей информацией;\n"
+    "• моя постоянная личная поддержка;\n"
+    "• по завершении — доступ в сообщество «Осознанные люди», где мы идём дальше.\n\n"
+    "✨ <b>Что ты получишь за 4 недели:</b>\n"
+    "→ ясность — поймёшь, кто ты и чего хочешь на самом деле;\n"
+    "→ дело, которое приносит радость и доход;\n"
+    "→ энергию, которой хватит и на работу, и на жизнь;\n"
+    "→ уверенность и внутреннюю опору;\n"
+    "→ инструменты, которые останутся с тобой и будут работать каждый день.\n\n"
+    "Главное отличие: книги и курсы дают знания, но откаты возвращают в старое. Наставничество — это когда ты не один: "
+    "рядом проводник, и вместе мы доводим до результата.\n\n"
+    "👉 Хочешь проверить, насколько это твоё? Жми «Оставить заявку» и приходи на бесплатную диагностику."
+)
+
+def mentoring_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📝 Оставить заявку", url="https://t.me/your_contact"))
+    kb.add(InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu"))
+    return kb
+
+@dp.callback_query_handler(lambda c: c.data == "back_to_menu")
+async def back_to_menu(call: types.CallbackQuery):
+    await call.answer()
+    await call.message.answer("Главное меню:", reply_markup=main_menu())
+
+# ---------- Донаты ----------
+DONATE_TEXT = (
+    "Если хочешь поддержать проект:\n"
+    "• Tribute — https://t.me/tribute/app?startapp=dq3\n"
+    "• СБП по QR — картинка ниже."
+)
+
+# ---------- Ежедневная рассылка ----------
+async def broadcast_daily_question():
+    """Отправка вопроса дня подписчикам."""
+    if not daily_subscribers:
+        return
+    idx = day_index()
+    q = QUESTIONS[idx]
+    text = f"🧠 <b>Вопрос дня</b>\n\n{q['text']}\n\nВыбери вариант:"
+    for uid in list(daily_subscribers):
+        try:
+            await bot.send_message(uid, text, reply_markup=question_keyboard(idx))
+        except Exception as e:
+            # если блокировка — удаляем из рассылки
+            if "blocked" in str(e).lower():
+                daily_subscribers.discard(uid)
+            log_event(uid, "daily_send_error", str(e))
+
+# Планировщик
+scheduler = BackgroundScheduler(timezone="Europe/Moscow")
+# каждый день в 08:00 по Москве
+scheduler.add_job(lambda: executor._get_loop(dp).create_task(broadcast_daily_question()),
+                  "cron", hour=8, minute=0, id="daily_qod", replace_existing=True)
+
+# ===================== KEEP-ALIVE WEB =====================
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "service": "telegram_bot"}).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *args, **kwargs):
+        # тихий лог
+        return
+
+def run_keepalive_forever():
+    while True:
+        try:
+            port = int(os.environ.get("PORT", "10000"))
+            print(f"[keepalive] starting on 0.0.0.0:{port}", flush=True)
+            server = HTTPServer(("0.0.0.0", port), HealthHandler)
+            server.serve_forever()
+        except Exception as e:
+            print(f"[keepalive] error: {e}", flush=True)
+            time.sleep(3)
+
+# ===================== СТАРТ =====================
+
+def _safe_polling():
+    """Защита от внезапных обрывов polling."""
+    while True:
+        try:
+            print("[bot] start_polling...", flush=True)
+            executor.start_polling(dp, skip_updates=True)
+        except Exception as e:
+            print(f"[bot] polling crashed: {e}", flush=True)
+            time.sleep(3)
 
 if __name__ == "__main__":
-    setup_scheduler()
-    executor.start_polling(dp, skip_updates=True)
+    ensure_events_csv()
+
+    # Keep-alive server в отдельном потоке, чтобы Render видел порт
+    threading.Thread(target=run_keepalive_forever, daemon=True).start()
+
+    # Планировщик
+    scheduler.start()
+    print("[scheduler] started", flush=True)
+
+    # Стартуем polling с авто‑рестартом
+    _safe_polling()
