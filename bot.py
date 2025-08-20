@@ -318,38 +318,51 @@ def _run_keepalive_forever():
 
 # ===================== DAILY INSIGHTS =====================
 async def send_daily_insight():
-    """Send daily insight to subscribed users"""
     if not daily_subscribers:
         return
-
     insight = get_today_insight()
     text = f"🪄 Вопрос дня\n\n{insight}"
-
-    sent_count = 0
+    sent = 0
     for user_id in daily_subscribers.copy():
         try:
             await bot.send_message(user_id, text)
-            sent_count += 1
+            sent += 1
         except Exception as e:
-            print(f"Failed to send daily insight to {user_id}: {e}")
+            print(f"[daily] fail {user_id}: {e}")
             if "bot was blocked" in str(e).lower():
                 daily_subscribers.discard(user_id)
+    print(f"[daily] sent: {sent}")
 
-    print(f"Daily insight sent to {sent_count} users")
+# ---- удаляем webhook при старте (чтобы точно работал long polling)
+async def on_startup(dp):
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("[startup] webhook removed")
+    except Exception as e:
+        print(f"[startup] delete_webhook error: {e}")
 
+# ---- планировщик
+def setup_scheduler():
+    scheduler.add_job(
+        send_daily_insight,
+        CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
+        id="daily_insight",
+        replace_existing=True,
+    )
+    scheduler.start()
+    print("[scheduler] started")
 
-# ============== KEEP-ALIVE WEB SERVER (ОСТАВЛЯЕМ) ==============
+# ---- keep-alive http (без изменений)
 import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 class HealthHandler(BaseHTTPRequestHandler):
     def _respond(self):
         self.send_response(200)
-        self.send_header('Content-type', 'application/json')
+        self.send_header("Content-type", "application/json")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
-
     def do_GET(self):  self._respond()
     def do_HEAD(self): self._respond()
     def log_message(self, format, *args): pass
@@ -358,44 +371,25 @@ def _run_keepalive_forever():
     while True:
         try:
             port = int(os.environ.get("PORT", 5000))
-            print(f"[keepalive] starting on 0.0.0.0:{port}", flush=True)
-            server = HTTPServer(("0.0.0.0", port), HealthHandler)
-            server.serve_forever()
+            print(f"[keepalive] 0.0.0.0:{port}", flush=True)
+            HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
         except Exception as e:
             print(f"[keepalive] crashed: {e}\n{traceback.format_exc()}", flush=True)
             time.sleep(3)
 
-
-# ============== ПЛАНИРОВЩИК (ЕЖЕДНЕВКА) ==============
-def setup_scheduler():
-    scheduler.add_job(
-        send_daily_insight,
-        CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
-        id="daily_insight",
-        replace_existing=True
-    )
-    scheduler.start()
-    print("Scheduler started")
-
-
 # ===================== SINGLE ENTRY =====================
 if __name__ == "__main__":
-    # создаём events.csv при первом запуске
+    # первый запуск — создаём events.csv
     if not os.path.exists("events.csv"):
         with open("events.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "user_id", "event", "details"])
+            csv.writer(f).writerow(["timestamp", "user_id", "event", "details"])
 
-    # поднимем keep-alive http-сервер в отдельном потоке (это ОК)
+    # поднимем keep-alive в отдельном потоке
     threading.Thread(target=_run_keepalive_forever, daemon=True).start()
 
-    # подготовка ассетов
     ensure_images()
     ensure_pdfs()
-
-    # расписание ежедневной рассылки
     setup_scheduler()
 
-    # ВАЖНО: ОДИН-ЕДИНСТВЕННЫЙ запуск polling
-    print("[bot] start_polling (single instance)", flush=True)
-    executor.start_polling(dp, skip_updates=True)
+    print("[bot] start_polling (single instance)")
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
