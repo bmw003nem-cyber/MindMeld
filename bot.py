@@ -331,20 +331,15 @@ def setup_scheduler():
 
 # ===================== ENTRY POINT =====================
 if __name__ == "__main__":
-    # CSV заголовок при первом запуске
     if not os.path.exists(STATS_CSV):
         with open(STATS_CSV, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["timestamp", "user_id", "event", "details"])
 
-    # keep‑alive сервер (для аптайм‑монитора)
     threading.Thread(target=run_keepalive, daemon=True).start()
 
     ensure_images()
     ensure_pdfs()
     setup_scheduler()
-
-    print("[bot] start_polling (single instance)")
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
 
     print("[bot] start_polling (single instance)")
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
