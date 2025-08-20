@@ -333,7 +333,7 @@ async def send_daily_insight():
                 daily_subscribers.discard(user_id)
     print(f"[daily] sent: {sent}")
 
-# ---- удаляем webhook при старте (чтобы точно работал long polling)
+# ---- удаляем webhook при старте
 async def on_startup(dp):
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -352,39 +352,13 @@ def setup_scheduler():
     scheduler.start()
     print("[scheduler] started")
 
-# ---- keep-alive http (без изменений)
-import socket
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def _respond(self):
-        self.send_response(200)
-        self.send_header("Content-type", "application/json")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(b'{"status":"ok","service":"telegram_bot"}')
-    def do_GET(self):  self._respond()
-    def do_HEAD(self): self._respond()
-    def log_message(self, format, *args): pass
-
-def _run_keepalive_forever():
-    while True:
-        try:
-            port = int(os.environ.get("PORT", 5000))
-            print(f"[keepalive] 0.0.0.0:{port}", flush=True)
-            HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
-        except Exception as e:
-            print(f"[keepalive] crashed: {e}\n{traceback.format_exc()}", flush=True)
-            time.sleep(3)
-
 # ===================== SINGLE ENTRY =====================
 if __name__ == "__main__":
-    # первый запуск — создаём events.csv
     if not os.path.exists("events.csv"):
         with open("events.csv", "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["timestamp", "user_id", "event", "details"])
 
-    # поднимем keep-alive в отдельном потоке
+    # keep-alive web server в отдельном потоке
     threading.Thread(target=_run_keepalive_forever, daemon=True).start()
 
     ensure_images()
