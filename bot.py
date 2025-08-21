@@ -7,7 +7,7 @@ MindMeld Bot — финальная версия (inline-прозрачные к
 - «Гайды»: выдаёт один PDF после проверки подписки на @vse_otvety_vnutri_nas
 - «Вопрос дня 2.0»: варианты + свободный ответ + ежедневное напоминание 09:00 Europe/Moscow
 - «Наставничество», «Консультация», «Диагностика», «Отзывы», «Связаться»
-- Запуск: polling (как у тебя), один инстанс на токен
+- Запуск: polling (один инстанс на токен)
 """
 
 import logging
@@ -18,7 +18,7 @@ import pytz
 
 from flask import Flask
 from telegram import (
-    Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+    Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, ReplyKeyboardRemove
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -213,17 +213,40 @@ def guides_kb() -> InlineKeyboardMarkup:
 USER_STATE = {}             # временное состояние QOD
 USER_GUIDE_RECEIVED = set() # кто уже получил один гайд
 
+# Тексты старых reply‑кнопок (на всякий случай)
+LEGACY_BUTTON_TEXTS = {
+    "Наставничество", "Консультация", "Гайды", "Вопрос дня",
+    "Отзывы", "Поддержать", "Диагностика (30 мин, бесплатно)", "Связаться"
+}
+
 # ───────────────────── ЭКРАНЫ/ПОТОКИ ────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+
+    # 1) Снять возможную старую reply‑клавиатуру
+    try:
+        await ctx.bot.send_message(chat_id, " ", reply_markup=ReplyKeyboardRemove())
+    except Exception:
+        pass
+
+    # 2) Отправить приветствие с фото + inline‑меню
     try:
         with open(WELCOME_PHOTO, "rb") as f:
-            await ctx.bot.send_photo(chat_id, photo=f, caption=WELCOME_TEXT,
-                                     parse_mode=ParseMode.HTML, reply_markup=menu_inline_kb())
+            await ctx.bot.send_photo(
+                chat_id,
+                photo=f,
+                caption=WELCOME_TEXT,
+                parse_mode=ParseMode.HTML,
+                reply_markup=menu_inline_kb(),
+            )
     except Exception as e:
         log.warning("WELCOME_PHOTO send failed: %s", e)
-        await ctx.bot.send_message(chat_id, WELCOME_TEXT,
-                                   parse_mode=ParseMode.HTML, reply_markup=menu_inline_kb())
+        await ctx.bot.send_message(
+            chat_id,
+            WELCOME_TEXT,
+            parse_mode=ParseMode.HTML,
+            reply_markup=menu_inline_kb(),
+        )
 
 async def callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -440,6 +463,9 @@ async def qod_reminder(ctx: ContextTypes.DEFAULT_TYPE):
 async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id if update.effective_user else None
     st = USER_STATE.get(uid or -1)
+    text = (update.message.text or "").strip() if update.message else ""
+
+    # Если ждём комментарий — обрабатываем его
     if st and st.get("stage") == "await_comment":
         USER_STATE.pop(uid, None)
         await update.message.reply_text(
@@ -449,8 +475,15 @@ async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
             ])
         )
-    else:
+        return
+
+    # Игнорируем старые reply‑кнопки (если клиент их ещё шлёт)
+    if text in LEGACY_BUTTON_TEXTS:
         await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
+        return
+
+    # Любой другой текст — показываем меню
+    await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
 
 # ─────────── Отключение напоминаний ───────────
 async def stopremind(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
