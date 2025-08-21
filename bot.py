@@ -93,8 +93,6 @@ MENTORSHIP_TEXT = (
     "• энергию, которой хватит и на работу, и на жизнь;\n"
     "• уверенность и внутреннюю опору;\n"
     "• инструменты, которые останутся с тобой и будут работать каждый день.\n\n"
-    "Главное отличие: книги и курсы дают знания, но откаты возвращают тебя в старое. "
-    "Наставничество — это когда ты не один: рядом проводник, и вместе мы доводим до результата.\n\n"
     "👉 <b>Хочешь проверить, насколько это твоё?</b> Жми «Оставить заявку» и приходи на бесплатную диагностику."
 )
 
@@ -223,7 +221,7 @@ LEGACY_BUTTON_TEXTS = {
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # 1) Снять возможную старую reply‑клавиатуру
+    # 1) Снять возможную старую reply‑клавиатуру (жёстко)
     try:
         await ctx.bot.send_message(chat_id, " ", reply_markup=ReplyKeyboardRemove())
     except Exception:
@@ -247,6 +245,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             reply_markup=menu_inline_kb(),
         )
+
+# команда для ручного скрытия клавиатуры
+async def hidekeyboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Клавиатура скрыта.", reply_markup=ReplyKeyboardRemove())
 
 async def callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -461,9 +463,16 @@ async def qod_reminder(ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─────────── Обработчик текстов (для QOD-комментария) ───────
 async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     uid = update.effective_user.id if update.effective_user else None
     st = USER_STATE.get(uid or -1)
     text = (update.message.text or "").strip() if update.message else ""
+
+    # Жёстко снимаем любую старую reply‑клавиатуру на любой текст
+    try:
+        await ctx.bot.send_message(chat_id, " ", reply_markup=ReplyKeyboardRemove())
+    except Exception:
+        pass
 
     # Если ждём комментарий — обрабатываем его
     if st and st.get("stage") == "await_comment":
@@ -477,7 +486,7 @@ async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Игнорируем старые reply‑кнопки (если клиент их ещё шлёт)
+    # Игнорируем старые надписи с reply‑кнопок (если клиент их ещё шлёт)
     if text in LEGACY_BUTTON_TEXTS:
         await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
         return
@@ -500,6 +509,8 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
+    app.add_handler(CommandHandler("hide", hidekeyboard))
+    app.add_handler(CommandHandler("hidekeyboard", hidekeyboard))
     app.add_handler(CommandHandler("stopremind", stopremind))
 
     app.add_handler(CallbackQueryHandler(callbacks))
