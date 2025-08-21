@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-MindMeld Bot — финальная версия (inline-прозрачные кнопки)
+MindMeld Bot — финальная сборка
+- inline-меню (прозрачные кнопки) + «← Назад»
 - Flask keep-alive (/ и /health) для Render + UptimeRobot
 - Приветствие с фото (assets/welcome.jpg)
 - «Поддержать» с QR (assets/qr.png)
-- «Гайды»: выдаёт один PDF после проверки подписки на @vse_otvety_vnutri_nas
-- «Вопрос дня 2.0»: варианты + свободный ответ + ежедневное напоминание 09:00 Europe/Moscow
+- «Гайды»: 1 PDF после проверки подписки на @vse_otvety_vnutri_nas
+- «Вопрос дня 2.0»: варианты + свободный ответ + напоминание 09:00 Europe/Moscow
 - «Наставничество», «Консультация», «Диагностика», «Отзывы», «Связаться»
-- Запуск: polling (один инстанс на токен)
+- polling (не нужен webhook)
 """
 
 import logging
@@ -29,7 +30,7 @@ from telegram.ext import (
 # ─────────────────────────── ЛОГИ ───────────────────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 log = logging.getLogger("mindmeld_bot")
 
@@ -38,9 +39,8 @@ BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN пуст. Укажи его в Render → Environment.")
 
-# Канал для проверки подписки на гайды
-CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"
-CHANNEL_ID = ""  # можно указать numeric id канала, если знаешь
+CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"  # для проверки подписки
+CHANNEL_ID = ""  # можно numeric id (если знаешь), иначе пусто — используем username
 
 # Ссылки
 REVIEWS_CHANNEL_URL = "https://t.me/+4Ov29pR6uj9iYjgy"
@@ -79,59 +79,39 @@ WELCOME_TEXT = (
 
 MENTORSHIP_TEXT = (
     "<b>Наставничество — твой путь к себе и жизни на 100%</b>\n\n"
-    "Это не курс и не вебинар. Это твоя личная трансформация, где мы смотрим не на один кусочек, "
-    "а на всю жизнь целиком: тело и энергию, мышление и режим, окружение, внутреннюю опору и твоё предназначение.\n\n"
-    "📌 <b>Как устроено наставничество:</b>\n"
+    "📌 <b>Как устроено:</b>\n"
     "• 4 недели — 14 тем;\n"
-    "• задания каждые 2 дня, чтобы прожить и закрепить изменения;\n"
-    "• закрытый Telegram-канал со всей информацией;\n"
-    "• моя постоянная личная поддержка;\n"
-    "• по завершении — доступ в сообщество «Осознанные люди», где мы идём дальше.\n\n"
-    "✨ <b>Что ты получишь за 4 недели:</b>\n"
-    "• ясность — поймёшь, кто ты и чего хочешь на самом деле;\n"
+    "• задания каждые 2 дня;\n"
+    "• закрытый Telegram‑канал;\n"
+    "• моя личная поддержка;\n"
+    "• доступ в сообщество «Осознанные люди».\n\n"
+    "✨ <b>За 4 недели ты получишь:</b>\n"
+    "• ясность, энергию, внутреннюю опору;\n"
     "• дело, которое приносит радость и доход;\n"
-    "• энергию, которой хватит и на работу, и на жизнь;\n"
-    "• уверенность и внутреннюю опору;\n"
-    "• инструменты, которые останутся с тобой и будут работать каждый день.\n\n"
-    "👉 <b>Хочешь проверить, насколько это твоё?</b> Жми «Оставить заявку» и приходи на бесплатную диагностику."
+    "• инструменты на каждый день.\n\n"
+    "👉 Хочешь проверить, насколько это твоё? Жми «Оставить заявку» или запишись на бесплатную диагностику."
 )
 
 CONSULTATION_TEXT = (
     "<b>Консультация — 60 минут, которые помогут сдвинуться с места</b>\n\n"
-    "Это личная встреча со мной 1-на-1 (онлайн). За час мы разбираем твой запрос и собираем <b>пошаговый план</b>, "
-    "с которым можно двигаться дальше. <b>Запись остаётся у тебя.</b>\n\n"
+    "За час разбираем твой запрос и собираем <b>пошаговый план</b> на 14–30 дней. <b>Запись остаётся у тебя.</b>\n\n"
     "📍 <b>Что включено:</b>\n"
-    "• Определим твою точку А — где ты сейчас.\n"
-    "• Разберём, что мешает двигаться.\n"
-    "• Определим точку Б — чего ты хочешь.\n"
-    "• Сложим пошаговый план на 14–30 дней.\n\n"
-    "🔥 <b>Что получаешь:</b>\n"
-    "• ясность, куда идти и зачем,\n"
-    "• чёткие шаги и практики под твой запрос,\n"
-    "• понимание, как обходить блоки и не застревать снова.\n\n"
-    "<b>Формат:</b> онлайн (Google Meet/Zoom). <b>60 минут.</b>\n"
-    "После — запись и план остаются у тебя.\n\n"
-    "👉 Жми <b>«Оставить заявку»</b>, если хочешь навести порядок в голове и увидеть конкретный путь.\n\n"
-    "<i>Сомневаешься, с чего начать?</i> Жми «Записаться на диагностику» — это бесплатно, 30 минут."
+    "• Точка А, что мешает, точка Б;\n"
+    "• конкретные шаги и практики;\n"
+    "• как обходить блоки и не застревать.\n\n"
+    "👉 Если сомневаешься, начни с бесплатной диагностики (30 мин)."
 )
 
 GUIDES_HEADER = (
     "<b>Выбери один гайд</b>\n"
-    "⚠️ Важно: получить можно <b>только один</b> гайд (чтобы не распыляться и дойти до результата).\n\n"
-    "Каждый гайд — это <b>практический PDF</b> с упражнениями на 20–40 минут, которые помогают не просто «понять», "
-    "а <b>сделать</b>.\n\n"
-    "💡 Перед скачиванием бот проверит подписку на канал — доступ открывается только подписчикам."
+    "⚠️ Можно получить <b>только один</b>, чтобы сфокусироваться и дойти до результата.\n\n"
+    "Перед скачиванием бот проверит подписку на канал."
 )
 
 DIAG_TEXT = (
-    "<b>Бесплатная диагностика — 30 минут, чтобы понять твой запрос и формат помощи</b>\n\n"
-    "Это короткая стратегическая встреча со мной, где мы:\n"
-    "• проясняем твой запрос и цель;\n"
-    "• смотрим, что мешает сейчас;\n"
-    "• решаем, подойдёт ли тебе консультация или наставничество, и чем они помогут;\n"
-    "• даю 1–2 шага, с которых можно начать уже сегодня.\n\n"
-    "🔎 Цель диагностики — понять, <b>подхожу ли я тебе как проводник</b> и какой формат даст лучший результат.\n\n"
-    "👉 <b>Записаться на диагностику:</b> по кнопке ниже."
+    "<b>Бесплатная диагностика — 30 минут</b>\n\n"
+    "Проясним запрос и цель, решим, подойдёт ли консультация или наставничество, дам 1–2 шага на старт.\n\n"
+    "Цель — понять, подхожу ли я тебе как проводник и какой формат даст лучший результат."
 )
 
 QUESTION_INTROS = [
@@ -207,27 +187,44 @@ def guides_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
     ])
 
-# ───────────────── Состояние (QOD/Гайды) ────────────────────
-USER_STATE = {}             # временное состояние QOD
+# ───────────── Служебные хранилища ─────────────
+USER_STATE = {}             # для Вопроса дня
 USER_GUIDE_RECEIVED = set() # кто уже получил один гайд
 
-# Тексты старых reply‑кнопок (на всякий случай)
 LEGACY_BUTTON_TEXTS = {
-    "Наставничество", "Консультация", "Гайды", "Вопрос дня",
-    "Отзывы", "Поддержать", "Диагностика (30 мин, бесплатно)", "Связаться"
+    "Наставничество","Консультация","Гайды","Вопрос дня",
+    "Отзывы","Поддержать","Диагностика (30 мин, бесплатно)","Связаться"
 }
+
+# ───────────── Универсальная правка сообщений ─────────────
+async def safe_edit(q, text, reply_markup=None, parse_mode=ParseMode.HTML):
+    """
+    Правим сообщение безопасно:
+    - если исходное было фото с caption — правим caption;
+    - если текст — правим text;
+    - иначе отправляем новое.
+    """
+    try:
+        msg = q.message
+        if getattr(msg, "photo", None):
+            return await msg.edit_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        if msg.text:
+            return await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return await msg.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception:
+        return await q.message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
 # ───────────────────── ЭКРАНЫ/ПОТОКИ ────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # 1) Снять возможную старую reply‑клавиатуру (жёстко)
+    # Жёстко снимаем возможную старую reply‑клавиатуру
     try:
         await ctx.bot.send_message(chat_id, " ", reply_markup=ReplyKeyboardRemove())
     except Exception:
         pass
 
-    # 2) Отправить приветствие с фото + inline‑меню
+    # Приветствие с фото + inline‑меню
     try:
         with open(WELCOME_PHOTO, "rb") as f:
             await ctx.bot.send_photo(
@@ -240,13 +237,9 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.warning("WELCOME_PHOTO send failed: %s", e)
         await ctx.bot.send_message(
-            chat_id,
-            WELCOME_TEXT,
-            parse_mode=ParseMode.HTML,
-            reply_markup=menu_inline_kb(),
+            chat_id, WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=menu_inline_kb()
         )
 
-# команда для ручного скрытия клавиатуры
 async def hidekeyboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Клавиатура скрыта.", reply_markup=ReplyKeyboardRemove())
 
@@ -264,42 +257,42 @@ async def callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "nav:mentorship":
-        await q.message.edit_text(MENTORSHIP_TEXT, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+        await safe_edit(q, MENTORSHIP_TEXT, reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Оставить заявку", callback_data="req:mentorship")],
             [InlineKeyboardButton("🧭 Записаться на диагностику", url=DIAGNOSTIC_URL)],
             [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
         ])); return
 
     if data == "nav:consultation":
-        await q.message.edit_text(CONSULTATION_TEXT, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+        await safe_edit(q, CONSULTATION_TEXT, reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Оставить заявку", callback_data="req:consultation")],
             [InlineKeyboardButton("🧭 Записаться на диагностику", url=DIAGNOSTIC_URL)],
             [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
         ])); return
 
     if data == "nav:guides":
-        await q.message.edit_text(GUIDES_HEADER, parse_mode=ParseMode.HTML, reply_markup=guides_kb()); return
+        await safe_edit(q, GUIDES_HEADER, reply_markup=guides_kb()); return
 
     if data == "nav:qod":
         await send_qod_entry(update, ctx, edit=True); return
 
     if data == "nav:reviews":
-        await q.message.edit_text("Отзывы:", reply_markup=reviews_kb()); return
+        await safe_edit(q, "Отзывы:", reply_markup=reviews_kb()); return
 
     if data == "nav:support":
         await send_support(update, ctx, via_callback=True); return
 
     if data == "nav:contact":
-        await q.message.edit_text("Связаться со мной:", reply_markup=contact_kb()); return
+        await safe_edit(q, "Связаться со мной:", reply_markup=contact_kb()); return
 
     if data == "nav:diagnostics":
-        await q.message.edit_text(DIAG_TEXT, parse_mode=ParseMode.HTML, reply_markup=diagnostics_kb()); return
+        await safe_edit(q, DIAG_TEXT, reply_markup=diagnostics_kb()); return
 
     # заявки
     if data == "req:mentorship":
-        await q.message.edit_text("Оставить заявку на наставничество — напиши мне в личку:", reply_markup=contact_kb()); return
+        await safe_edit(q, "Оставить заявку на наставничество — напиши мне в личку:", reply_markup=contact_kb()); return
     if data == "req:consultation":
-        await q.message.edit_text("Оставить заявку на консультацию — напиши мне в личку:", reply_markup=contact_kb()); return
+        await safe_edit(q, "Оставить заявку на консультацию — напиши мне в личку:", reply_markup=contact_kb()); return
 
     # guides
     if data.startswith("guide:"):
@@ -338,7 +331,7 @@ async def send_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE, via_callb
 
     # запасной вариант — без фото
     if via_callback:
-        await update.callback_query.message.edit_text(caption, parse_mode=ParseMode.HTML, reply_markup=support_kb())
+        await safe_edit(update.callback_query, caption, reply_markup=support_kb())
     else:
         await ctx.bot.send_message(chat_id, caption, parse_mode=ParseMode.HTML, reply_markup=support_kb())
 
@@ -348,17 +341,16 @@ async def handle_guide(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
 
     if uid in USER_GUIDE_RECEIVED:
-        await q.message.edit_text(
-            "Кажется, ты уже получил свой гайд. Закрой текущий цикл — и приходи за следующим на эфир/в мастер‑разбор.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])
-        )
+        await safe_edit(q,
+            "Кажется, ты уже получил свой гайд. Закрой текущий цикл — и приходи за следующим.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
         return
 
     key = (q.data or "").split(":", 1)[1]
     filename = GUIDE_FILES.get(key)
     if not filename:
-        await q.message.edit_text("Файл не найден.",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
+        await safe_edit(q, "Файл не найден.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
         return
 
     # проверка подписки
@@ -372,19 +364,21 @@ async def handle_guide(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.warning("Channel check failed: %s", e)
 
     if not allow:
-        await q.message.edit_text("Подпишись на канал, и доступ к гайдам откроется. 👍",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
+        await safe_edit(q, "Подпишись на канал, и доступ к гайдам откроется 👍",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
         return
 
     try:
         with open(filename, "rb") as f:
-            await q.message.reply_document(InputFile(f, filename=filename),
-                                           caption="Держи! Пусть зайдёт в работу сегодня.",
-                                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
+            await q.message.reply_document(
+                InputFile(f, filename=filename),
+                caption="Держи! Пусть зайдёт в работу сегодня.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])
+            )
         USER_GUIDE_RECEIVED.add(uid)
     except FileNotFoundError:
-        await q.message.edit_text("PDF пока недоступен на сервере — проверь, что файл лежит рядом с ботом.",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
+        await safe_edit(q, "PDF пока недоступен на сервере — проверь, что файл лежит рядом с ботом.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
 
 # ─────────── ВОПРОС ДНЯ 2.0 ───────────
 async def send_qod_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, edit: bool = False):
@@ -394,9 +388,9 @@ async def send_qod_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE, edit: b
     ])
     text = ("<b>Вопрос дня</b>\n"
             "Маленький шаг сегодня — большой сдвиг за месяц. "
-            "Отвечай честно для себя: это займёт 30–60 секунд. (Доступен и свободный ответ.)")
+            "Отвечай честно для себя: займёт 30–60 секунд. (Есть и свободный ответ.)")
     if edit:
-        await update.callback_query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        await safe_edit(update.callback_query, text, reply_markup=kb)
     else:
         await ctx.bot.send_message(update.effective_chat.id, text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
@@ -412,7 +406,7 @@ async def qod_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Свободный ответ", callback_data="qod:free")],
             [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
         ])
-        await q.message.edit_text("Как ответишь?\n• выбери вариант;\n• или напиши свой свободный ответ.", reply_markup=kb); return
+        await safe_edit(q, "Как ответишь?\n• выбери вариант;\n• или напиши свой свободный ответ.", reply_markup=kb); return
 
     if data == "qod:variants":
         USER_STATE[uid] = {"stage": "variants"}
@@ -421,7 +415,7 @@ async def qod_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         USER_STATE[uid]["question"] = question
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(opt, callback_data=f"qod:pick:{opt}")] for opt in options] +
                                   [[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])
-        await q.message.edit_text(question, reply_markup=kb); return
+        await safe_edit(q, question, reply_markup=kb); return
 
     if data.startswith("qod:pick:"):
         choice = data.split(":", 2)[2]
@@ -434,17 +428,19 @@ async def qod_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Готово", callback_data="qod:done")],
             [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
         ])
-        await q.message.edit_text(f"Принято ✅\nСохрани для себя: {choice}.\nХочешь добавить пару слов?", reply_markup=kb); return
+        await safe_edit(q, f"Принято ✅\nСохрани для себя: {choice}.\nХочешь добавить пару слов?", reply_markup=kb); return
 
     if data == "qod:add_comment":
         USER_STATE[uid]["stage"] = "await_comment"
-        await q.message.edit_text("Напиши коротко (1–2 предложения). Что важного для тебя на сегодня?",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])); return
+        await safe_edit(q, "Напиши коротко (1–2 предложения). Что важного для тебя на сегодня?",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])); return
 
     if data == "qod:done":
-        await q.message.edit_text("Главное — маленький реальный шаг. Увидимся завтра ✌️",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поставить напоминание на завтра", callback_data="qod:remind")],
-                                                                     [InlineKeyboardButton("← Назад", callback_data="nav:menu")]]))
+        await safe_edit(q, "Главное — маленький реальный шаг. Увидимся завтра ✌️",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("Поставить напоминание на завтра", callback_data="qod:remind")],
+                            [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
+                        ]))
         USER_STATE.pop(uid, None); return
 
     if data == "qod:remind":
@@ -453,28 +449,27 @@ async def qod_callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for job in ctx.job_queue.get_jobs_by_name(job_name):
             job.schedule_removal()
         ctx.job_queue.run_daily(qod_reminder, dtime(hour=9, minute=0, tzinfo=tz), name=job_name, data=uid)
-        await q.message.edit_text("Напомню завтра в 09:00. Можно отключить командой /stopremind.",
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])); return
+        await safe_edit(q, "Напомню завтра в 09:00. Можно отключить командой /stopremind.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="nav:menu")]])); return
 
 async def qod_reminder(ctx: ContextTypes.DEFAULT_TYPE):
     uid = ctx.job.data
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ответить сейчас", callback_data="qod:start")]])
     await ctx.bot.send_message(uid, "Вопрос дня ✨", reply_markup=kb)
 
-# ─────────── Обработчик текстов (для QOD-комментария) ───────
+# ─────────── Обработчик текстов (QOD комментарий + меню) ────
 async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     uid = update.effective_user.id if update.effective_user else None
     st = USER_STATE.get(uid or -1)
     text = (update.message.text or "").strip() if update.message else ""
 
-    # Жёстко снимаем любую старую reply‑клавиатуру на любой текст
+    # Снять любую старую reply‑клавиатуру
     try:
         await ctx.bot.send_message(chat_id, " ", reply_markup=ReplyKeyboardRemove())
     except Exception:
         pass
 
-    # Если ждём комментарий — обрабатываем его
     if st and st.get("stage") == "await_comment":
         USER_STATE.pop(uid, None)
         await update.message.reply_text(
@@ -486,12 +481,10 @@ async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Игнорируем старые надписи с reply‑кнопок (если клиент их ещё шлёт)
     if text in LEGACY_BUTTON_TEXTS:
         await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
         return
 
-    # Любой другой текст — показываем меню
     await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
 
 # ─────────── Отключение напоминаний ───────────
@@ -504,7 +497,7 @@ async def stopremind(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─────────────────────────── MAIN ────────────────────────────
 def main():
-    keep_alive()  # HTTP‑сервер для Render
+    keep_alive()  # HTTP для Render
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
