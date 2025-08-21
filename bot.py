@@ -2,9 +2,7 @@ import logging
 import os
 from datetime import time as dtime, datetime
 import pytz
-from threading import Thread
 
-from flask import Flask
 from telegram import (
     Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton
@@ -20,7 +18,7 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 
 # Channel for subscription check
-CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"
+CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"   # как ты подтвердил
 CHANNEL_ID = ""  # можно оставить пустым
 
 # Fixed links (as provided)
@@ -30,7 +28,7 @@ TRIBUTE_URL         = "https://t.me/tribute/app?startapp=dq3J"
 CONTACT_TG_URL      = "https://t.me/Mr_Nikto4"
 DIAGNOSTIC_URL      = "https://t.me/m/0JIRBvZ_NmQy"
 
-# File paths
+# File paths (как у тебя уже есть в репо)
 WELCOME_PHOTO_PATH = "assets/welcome.jpg"
 QR_PHOTO_PATH      = "assets/qr.png"
 GUIDE_FILES = {
@@ -129,25 +127,6 @@ QUESTION_INTROS = [
     ("Какой минимум сделаешь при любой погоде?",
      ["1 действие", "3 действия", "5 действий", "Сначала 1 — потом ещё"]),
 ]
-
-# ============== Keep-alive HTTP (for Render Web Service + UptimeRobot) ==============
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot is running"
-
-@app.route("/health")
-def health():
-    return "ok"
-
-def run_http():
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
-
-def keep_alive():
-    t = Thread(target=run_http, daemon=True)
-    t.start()
 
 # ============== Keyboards ==============
 def main_menu_kb():
@@ -434,9 +413,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN env var is empty. Set it in Render → Environment.")
-    # Start tiny HTTP server for Render/UptimeRobot
-    keep_alive()
-
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -444,10 +420,11 @@ def main():
     app.add_handler(CommandHandler("stopremind", stop_remind))
 
     app.add_handler(CallbackQueryHandler(callbacks))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
 
     logging.info("Bot started.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
