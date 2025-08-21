@@ -1,403 +1,430 @@
-# -*- coding: utf-8 -*-
-# bot.py — основной код бота под config.py
-from __future__ import annotations
-
 import logging
-import sqlite3
-from contextlib import closing
-from datetime import datetime, date
-from pathlib import Path
-from typing import Optional
-
+import os
+from datetime import time as dtime, datetime
 import pytz
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+
 from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
+    Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters
 )
 
-import config  # локальный файл config.py
+# ================== SETTINGS ==================
+# Token ONLY from environment (Render → Environment → BOT_TOKEN)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 
-# =========================
-# ЛОГИ
-# =========================
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
+# Channel for subscription check
+CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"   # как ты подтвердил
+CHANNEL_ID = ""  # можно оставить пустым
+
+# Fixed links (as provided)
+REVIEWS_CHANNEL_URL = "https://t.me/+4Ov29pR6uj9iYjgy"
+REVIEWS_POST_URL    = "https://t.me/vse_otvety_vnutri_nas/287"
+TRIBUTE_URL         = "https://t.me/tribute/app?startapp=dq3J"
+CONTACT_TG_URL      = "https://t.me/Mr_Nikto4"
+DIAGNOSTIC_URL      = "https://t.me/m/0JIRBvZ_NmQy"
+
+# File paths (как у тебя уже есть в репо)
+WELCOME_PHOTO_PATH = "assets/welcome.jpg"
+QR_PHOTO_PATH      = "assets/qr.png"
+GUIDE_FILES = {
+    "path_to_self": "guide_path_to_self.pdf",
+    "know_but_dont_do": "guide_know_but_dont_do.pdf",
+    "self_acceptance": "guide_self_acceptance.pdf",
+    "shut_the_mind": "guide_shut_the_mind.pdf",
+}
+
+# ================== TEXTS ==================
+WELCOME_TEXT = (
+    "<b>👋 Привет, рад видеть тебя в моём пространстве!</b>\n\n"
+    "Я — Роман, предприниматель и наставник. Уже более 200 дней подряд практикую осознанные привычки и исследую, "
+    "как маленькие шаги меняют жизнь в долгую. За 8 лет я прошёл путь от «живу по инерции» до состояния, когда сам "
+    "создаю свою реальность и знаю, чего хочу.\n\n"
+    "В этом пространстве я делюсь тем, что работает:\n"
+    "🔧 инструменты для энергии и ясности,\n"
+    "🎯 способы находить своё дело и развивать его,\n"
+    "🧠 опыт, который помогает не просто «читать и знать», а реально применять.\n\n"
+    "<u>Что можно сделать прямо сейчас в этом боте:</u>\n"
+    "• Записаться на диагностику или консультацию\n"
+    "• Скачать полезные гайды (после подписки на канал)\n"
+    "• Узнать о программе наставничества\n"
+    "• Перейти в «Вопрос дня»\n\n"
+    "🔑 Всё, что тебе нужно, уже внутри тебя. Моя задача — помочь это услышать и сделать твоей опорой."
 )
-log = logging.getLogger("bot")
 
-# =========================
-# ПОДГОТОВКА ХРАНИЛИЩА
-# =========================
-Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+MENTORSHIP_TEXT = (
+    "<b>Наставничество — твой путь к себе и жизни на 100%</b>\n\n"
+    "Это не курс и не вебинар. Это твоя личная трансформация, где мы смотрим не на один кусочек, "
+    "а на всю жизнь целиком: тело и энергию, мышление и режим, окружение, внутреннюю опору и твоё предназначение.\n\n"
+    "📌 <b>Как устроено наставничество:</b>\n"
+    "• 4 недели — 14 тем;\n"
+    "• задания каждые 2 дня, чтобы прожить и закрепить изменения;\n"
+    "• закрытый Telegram-канал со всей информацией;\n"
+    "• моя постоянная личная поддержка;\n"
+    "• по завершении — доступ в сообщество «Осознанные люди», где мы идём дальше.\n\n"
+    "✨ <b>Что ты получишь за 4 недели:</b>\n"
+    "• ясность — поймёшь, кто ты и чего хочешь на самом деле;\n"
+    "• дело, которое приносит радость и доход;\n"
+    "• энергию, которой хватит и на работу, и на жизнь;\n"
+    "• уверенность и внутреннюю опору;\n"
+    "• инструменты, которые останутся с тобой и будут работать каждый день.\n\n"
+    "Главное отличие: книги и курсы дают знания, но откаты возвращают тебя в старое. "
+    "Наставничество — это когда ты не один: рядом проводник, и вместе мы доводим до результата.\n\n"
+    "👉 <b>Хочешь проверить, насколько это твоё?</b> Жми «Оставить заявку» и приходи на бесплатную диагностику."
+)
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+CONSULTATION_TEXT = (
+    "<b>Консультация — 60 минут, которые помогут сдвинуться с места</b>\n\n"
+    "Это личная встреча со мной 1-на-1 (онлайн). За час мы разбираем твой запрос и собираем <b>пошаговый план</b>, "
+    "с которым можно двигаться дальше. <b>Запись остаётся у тебя.</b>\n\n"
+    "📍 <b>Что включено:</b>\n"
+    "• Определим твою точку А — где ты сейчас.\n"
+    "• Разберём, что мешает двигаться.\n"
+    "• Определим точку Б — чего ты хочешь.\n"
+    "• Сложим пошаговый план на 14–30 дней.\n\n"
+    "🔥 <b>Что получаешь:</b>\n"
+    "• ясность, куда идти и зачем,\n"
+    "• чёткие шаги и практики под твой запрос,\n"
+    "• понимание, как обходить блоки и не застревать снова.\n\n"
+    "<b>Формат:</b> онлайн (Google Meet/Zoom). <b>60 минут.</b>\n"
+    "После — запись и план остаются у тебя.\n\n"
+    "👉 Жми <b>«Оставить заявку»</b>, если хочешь навести порядок в голове и увидеть конкретный путь.\n\n"
+    "<i>Сомневаешься, с чего начать?</i> Жми «Записаться на диагностику» — это бесплатно, 30 минут."
+)
 
-def init_db() -> None:
-    with closing(db()) as conn, conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS users(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER UNIQUE,
-            username TEXT,
-            first_name TEXT,
-            last_name TEXT,
-            subscribed INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS answers(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            question_id TEXT,
-            answer_index INTEGER,
-            correct INTEGER,
-            answered_on TEXT, -- YYYY-MM-DD в TZ
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS guide_clicks(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            guide_slug TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
+GUIDES_HEADER = (
+    "<b>Выбери один гайд</b>\n"
+    "⚠️ Важно: получить можно <b>только один</b> гайд (чтобы не распыляться и дойти до результата).\n\n"
+    "Каждый гайд — это <b>практический PDF</b> с упражнениями на 20–40 минут, которые помогают не просто «понять», "
+    "а <b>сделать</b>.\n\n"
+    "💡 Перед скачиванием бот проверит подписку на канал — доступ открывается только подписчикам."
+)
 
-init_db()
+DIAG_TEXT = (
+    "<b>Бесплатная диагностика — 30 минут, чтобы понять твой запрос и формат помощи</b>\n\n"
+    "Это короткая стратегическая встреча со мной, где мы:\n"
+    "• проясняем твой запрос и цель;\n"
+    "• смотрим, что мешает сейчас;\n"
+    "• решаем, подойдёт ли тебе консультация или наставничество, и чем они помогут;\n"
+    "• даю 1–2 шага, с которых можно начать уже сегодня.\n\n"
+    "🔎 Цель диагностики — понять, <b>подхожу ли я тебе как проводник</b> и какой формат даст лучший результат.\n\n"
+    "👉 <b>Записаться на диагностику:</b> по кнопке ниже."
+)
 
-# =========================
-# УТИЛИТЫ
-# =========================
-TZ = pytz.timezone(config.TZ)
+QUESTION_INTROS = [
+    ("Сколько времени сегодня ты уделишь себе (чистому присутствию)?",
+     ["2 мин", "5 мин", "10 мин", "20+ мин"]),
+    ("Что сегодня даст тебе больше энергии?",
+     ["Сон", "Движение", "Тишина/медитация", "Вода/питание"]),
+    ("Где сегодня нужен один честный шаг?",
+     ["Здоровье", "Дело", "Отношения", "Дом/быт"]),
+    ("Что ты готов отпустить сегодня?",
+     ["Сомнения", "Спешку", "Контроль", "Оправдания"]),
+    ("Какой минимум сделаешь при любой погоде?",
+     ["1 действие", "3 действия", "5 действий", "Сначала 1 — потом ещё"]),
+]
 
-def today_tz() -> date:
-    return datetime.now(TZ).date()
-
-def fmt_bold(text: str) -> str:
-    return f"**{text}**"  # жирный для Telegram
-
-def upsert_user(ctx: ContextTypes.DEFAULT_TYPE, u: Update) -> int:
-    chat = u.effective_chat
-    user = u.effective_user
-    with closing(db()) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO users (chat_id, username, first_name, last_name)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-              username=excluded.username,
-              first_name=excluded.first_name,
-              last_name=excluded.last_name
-            """,
-            (chat.id, user.username, user.first_name, user.last_name),
-        )
-        row = conn.execute("SELECT id FROM users WHERE chat_id=?", (chat.id,)).fetchone()
-        return int(row["id"])
-
-def reply_main_menu() -> ReplyKeyboardMarkup:
-    titles = config.BUTTONS["main_menu"]
+# ============== Keyboards ==============
+def main_menu_kb():
     rows = [
-        [KeyboardButton(titles[0]), KeyboardButton(titles[1])],
-        [KeyboardButton(titles[2]), KeyboardButton(titles[3])],
-        [KeyboardButton(titles[4]), KeyboardButton(titles[5])],
-        [KeyboardButton(titles[6])],
+        [KeyboardButton("🎯 Наставничество"), KeyboardButton("💬 Консультация"), KeyboardButton("📚 Гайды")],
+        [KeyboardButton("🔮 Вопрос дня"), KeyboardButton("💎 Отзывы"), KeyboardButton("💛 Поддержать")],
+        [KeyboardButton("🧭 Диагностика (30 мин, бесплатно)")],
+        [KeyboardButton("📞 Связаться")],
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-def links_row(*keys: str) -> list[InlineKeyboardButton]:
-    row: list[InlineKeyboardButton] = []
-    for k in keys:
-        meta = config.INLINE_LINKS.get(k)
-        if meta:
-            row.append(InlineKeyboardButton(text=meta["title"], url=meta["url"]))
-    return row
+def back_inline_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("← Назад", callback_data="back_to_menu")]])
 
-def get_today_question() -> dict:
-    day_idx = today_tz().toordinal()
-    return config.get_question_for_day(day_idx)
+def mentorship_kb():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Оставить заявку", callback_data="leave_request_mentorship"),
+    ], [
+        InlineKeyboardButton("🧭 Записаться на диагностику", url=DIAGNOSTIC_URL)
+    ], [
+        InlineKeyboardButton("← Назад", callback_data="back_to_menu")
+    ]])
 
-def question_keyboard(q: dict) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    for idx, opt in enumerate(q["options"]):
-        cb = f"ans|{q['id']}|{idx}|{today_tz().isoformat()}"
-        buttons.append([InlineKeyboardButton(text=opt, callback_data=cb)])
-    return InlineKeyboardMarkup(buttons)
+def consultation_kb():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Оставить заявку", callback_data="leave_request_consultation"),
+    ], [
+        InlineKeyboardButton("🧭 Записаться на диагностику", url=DIAGNOSTIC_URL)
+    ], [
+        InlineKeyboardButton("← Назад", callback_data="back_to_menu")
+    ]])
 
-def can_answer_today(user_id: int, qid: str, day: str) -> bool:
-    if config.ALLOW_RETRY_SAME_DAY:
-        return True
-    with closing(db()) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM answers WHERE user_id=? AND question_id=? AND answered_on=?",
-            (user_id, qid, day),
-        ).fetchone()
-        return row is None
+def guides_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Путь к себе", callback_data="guide:path_to_self")],
+        [InlineKeyboardButton("Знаю, но не делаю", callback_data="guide:know_but_dont_do")],
+        [InlineKeyboardButton("Принятие себя", callback_data="guide:self_acceptance")],
+        [InlineKeyboardButton("Заткнуть мозг", callback_data="guide:shut_the_mind")],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_menu")],
+    ])
 
-def save_answer(user_id: int, qid: str, idx: int, correct: bool, day: str) -> None:
-    with closing(db()) as conn, conn:
-        conn.execute(
-            """
-            INSERT INTO answers(user_id, question_id, answer_index, correct, answered_on)
-            VALUES(?,?,?,?,?)
-            """,
-            (user_id, qid, idx, 1 if correct else 0, day),
-        )
+def reviews_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть канал с отзывами", url=REVIEWS_CHANNEL_URL)],
+        [InlineKeyboardButton("Пост‑подборка", url=REVIEWS_POST_URL)],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_menu")],
+    ])
 
-async def send_question(chat_id: int, context: ContextTypes.DEFAULT_TYPE, preface=True) -> None:
-    q = get_today_question()
-    header = fmt_bold(config.QUESTION_OF_DAY_HEADER)
-    intro = config.TEXT_QUESTION_OF_DAY_INTRO
-    text = f"{header}\n\n{intro}\n\n{fmt_bold(q['text'])}"
-    kb = question_keyboard(q)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
+def support_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Открыть Tribute", url=TRIBUTE_URL)],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_menu")],
+    ])
 
-# =========================
-# ХЕНДЛЕРЫ
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    upsert_user(context, update)
-    await update.message.reply_text(
-        config.START_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_main_menu(),
-    )
+def diagnostics_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Записаться на диагностику", url=DIAGNOSTIC_URL)],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_menu")],
+    ])
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        config.HELP_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_main_menu(),
-    )
+# ============== State ==============
+USER_STATE = {}
+USER_GUIDE_RECEIVED = set()
 
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    upsert_user(context, update)
+# ============== Handlers ==============
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    try:
+        with open(WELCOME_PHOTO_PATH, "rb") as f:
+            await context.bot.send_photo(chat_id, photo=f, caption=WELCOME_TEXT,
+                                         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+    except Exception:
+        await context.bot.send_message(chat_id, WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("Главное меню:", reply_markup=main_menu_kb())
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
+    if text == "🎯 Наставничество":
+        await update.message.reply_text(MENTORSHIP_TEXT, parse_mode=ParseMode.HTML, reply_markup=mentorship_kb()); return
+    if text == "💬 Консультация":
+        await update.message.reply_text(CONSULTATION_TEXT, parse_mode=ParseMode.HTML, reply_markup=consultation_kb()); return
+    if text == "📚 Гайды":
+        await update.message.reply_text(GUIDES_HEADER, parse_mode=ParseMode.HTML, reply_markup=guides_kb()); return
+    if text == "🔮 Вопрос дня":
+        await send_qod_entry(update, context); return
+    if text == "💎 Отзывы":
+        await update.message.reply_text("Отзывы:", reply_markup=reviews_kb()); return
+    if text == "💛 Поддержать":
+        await send_support(update, context); return
+    if text == "📞 Связаться":
+        await update.message.reply_text("Связаться со мной:", reply_markup=
+            InlineKeyboardMarkup([[InlineKeyboardButton("Написать в Telegram", url=CONTACT_TG_URL)],
+                                  [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]])); return
+    if text == "🧭 Диагностика (30 мин, бесплатно)":
+        await update.message.reply_text(DIAG_TEXT, parse_mode=ParseMode.HTML, reply_markup=diagnostics_kb()); return
+    await update.message.reply_text("Выбирай пункт в меню ниже 👇", reply_markup=main_menu_kb())
 
-    if text == config.BUTTONS["main_menu"][0]:
-        await update.message.reply_text(config.TEXT_QUESTION_OF_DAY_INTRO, parse_mode=ParseMode.MARKDOWN)
-        await send_question(update.effective_chat.id, context)
+async def send_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    caption = (f"<b>Бодоненков Роман Валерьевич</b>\n"
+               "Номер договора 5388079294\n\n"
+               "<b>💛 Поддержать проект</b>\n"
+               "Деньги — это энергия. Если то, что я делаю, ценно для тебя, и хочешь сделать обмен энергией — "
+               "можешь отправить донат в любой сумме.\n\n"
+               "<b>Способы:</b>\n"
+               f"• Tribute — открой по кнопке ниже\n"
+               "• СБП по QR — картинка ниже.\n\n"
+               "Благодарю за вклад — он помогает делать больше ценного контента 🙌")
+    try:
+        with open(QR_PHOTO_PATH, "rb") as f:
+            await context.bot.send_photo(chat_id, photo=f, caption=caption, parse_mode=ParseMode.HTML,
+                                         reply_markup=support_kb()); return
+    except Exception:
+        pass
+    await context.bot.send_message(chat_id, caption, parse_mode=ParseMode.HTML, reply_markup=support_kb())
 
-    elif text == config.BUTTONS["main_menu"][1]:
-        await show_guides_list(update, context)
-
-    elif text == config.BUTTONS["main_menu"][2]:
-        await send_diagnostics(update, context)
-
-    elif text == config.BUTTONS["main_menu"][3]:
-        await send_mentoring(update, context)
-
-    elif text == config.BUTTONS["main_menu"][4]:
-        await send_reviews(update, context)
-
-    elif text == config.BUTTONS["main_menu"][5]:
-        await open_channel(update, context)
-
-    elif text == config.BUTTONS["main_menu"][6]:
-        await help_cmd(update, context)
-
-    else:
-        await update.message.reply_text("Выбери действие в меню ниже.", reply_markup=reply_main_menu())
-
-async def show_guides_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows: list[list[InlineKeyboardButton]] = []
-    for g in config.GUIDES:
-        rows.append([InlineKeyboardButton(text=g["title"], callback_data=f"guide|{g['slug']}")])
-    rows.append(links_row("reviews", "channel", "mentor"))
-    await update.message.reply_text(
-        config.TEXT_GUIDES,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-async def send_diagnostics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = [links_row("mentor"), links_row("reviews"), links_row("channel")]
-    await update.message.reply_text(
-        config.TEXT_DIAGNOSTICS,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-async def send_mentoring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = [links_row("mentor"), links_row("reviews"), links_row("channel")]
-    await update.message.reply_text(
-        config.TEXT_MENTORING,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-async def send_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = [links_row("reviews")]
-    await update.message.reply_text(
-        fmt_bold("Отзывы и кейсы учеников"),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-async def open_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = [links_row("channel")]
-    await update.message.reply_text(
-        "Открыть канал с постами и форматами «сериала»:",
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-# --------- CALLBACKS ----------
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# === Guides ===
+async def on_guide_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = (query.data or "")
     await query.answer()
+    data = query.data
+    if data == "back_to_menu":
+        await query.message.reply_text("Главное меню:", reply_markup=main_menu_kb()); return
 
-    if data.startswith("ans|"):
-        _, qid, sidx, day = data.split("|", 3)
-        idx = int(sidx)
-        user_id = upsert_user(context, update)
-        q: Optional[dict] = next((x for x in config.QUESTIONS if x["id"] == qid), None)
-        if not q:
-            await query.edit_message_text("Вопрос устарел. Попроси новый через меню.")
-            return
+    if data.startswith("guide:"):
+        if query.from_user.id in USER_GUIDE_RECEIVED:
+            await query.message.reply_text(
+                "Кажется, ты уже получил свой гайд. Закрой текущий цикл — и приходи за следующим на эфир/в мастер‑разбор.",
+                reply_markup=back_inline_kb()); return
 
-        if not can_answer_today(user_id, qid, day):
-            await query.edit_message_text("Ответ уже засчитан на сегодня. Возвращайся завтра 🙂")
-            return
+        key = data.split(":")[1]
+        filename = GUIDE_FILES.get(key)
+        if not filename:
+            await query.message.reply_text("Файл не найден.", reply_markup=back_inline_kb()); return
 
-        correct = (idx == int(q["correct"]))
-        save_answer(user_id, qid, idx, correct, day)
+        # subscription check
+        allow = True
+        try:
+            channel = CHANNEL_ID or CHANNEL_USERNAME
+            member = await context.bot.get_chat_member(chat_id=channel, user_id=query.from_user.id)
+            status = getattr(member, "status", "left")
+            allow = status in ("member", "administrator", "creator")
+        except Exception as e:
+            logging.warning("Channel check failed: %s", e)
 
-        prefix = config.TEXT_AFTER_ANSWER_RIGHT if correct else config.TEXT_AFTER_ANSWER_WRONG
-        msg = f"{prefix}\n\n{fmt_bold('Разбор:')} {q['explain']}\n\n{config.TEXT_EXPLANATION_FOOTER}"
-        kb = InlineKeyboardMarkup([links_row("channel", "reviews", "mentor")])
+        if not allow:
+            await query.message.reply_text("Подпишись на канал, и доступ к гайдам откроется. 👍",
+                                           reply_markup=back_inline_kb()); return
 
         try:
-            await query.edit_message_text(text=msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-        except Exception as e:
-            log.warning("edit_message failed: %s", e)
-            await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-
-    elif data.startswith("guide|"):
-        _, slug = data.split("|", 1)
-        await show_guide_detail(update, context, slug)
-
-async def show_guide_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, slug: str) -> None:
-    upsert_user(context, update)
-    g = config.safe_get_guide(slug)
-    if not g:
-        await update.effective_chat.send_message("Гайд не найден. Выбери из списка ещё раз.")
+            with open(filename, "rb") as f:
+                await query.message.reply_document(InputFile(f, filename=filename),
+                                                   caption="Держи! Пусть зайдёт в работу сегодня.",
+                                                   reply_markup=back_inline_kb())
+            USER_GUIDE_RECEIVED.add(query.from_user.id)
+        except FileNotFoundError:
+            await query.message.reply_text("PDF пока недоступен на сервере — проверь, что файл лежит рядом с ботом.",
+                                           reply_markup=back_inline_kb())
         return
 
-    body = [fmt_bold(g["title"]), g.get("description", "")]
-    steps = g.get("steps") or []
-    if steps:
-        body.append("\n".join(f"• {s}" for s in steps))
-    text = "\n\n".join([p for p in body if p])
+# === Question of the Day 2.0 ===
+async def send_qod_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id if update.message else update.callback_query.message.chat_id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Ответить сейчас", callback_data="qod:start")],
+        [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]
+    ])
+    await context.bot.send_message(chat_id, "<b>Вопрос дня</b>\nМаленький шаг сегодня — большой сдвиг за месяц. "
+                                            "Отвечай честно для себя: это займёт 30–60 секунд. "
+                                            "(Доступен и свободный ответ.)",
+                                   parse_mode=ParseMode.HTML, reply_markup=kb)
 
-    await update.effective_chat.send_message(
-        text=text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([links_row("mentor", "channel")]),
-    )
+async def qod_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data
+    await q.answer()
+    uid = q.from_user.id
 
-# --------- ПОДПИСКА НА АВТО-ВОПРОС ----------
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    upsert_user(context, update)
-    with closing(db()) as conn, conn:
-        conn.execute("UPDATE users SET subscribed=1 WHERE chat_id=?", (update.effective_chat.id,))
-    when = f"{config.QUESTION_PUSH_TIME.hour:02d}:{config.QUESTION_PUSH_TIME.minute:02d}"
-    await update.message.reply_text(
-        f"Готово! Буду присылать «Вопрос дня» каждый день в {when} ({config.TZ}).",
-        reply_markup=reply_main_menu(),
-    )
+    if data == "back_to_menu":
+        await q.message.reply_text("Главное меню:", reply_markup=main_menu_kb()); return
 
-async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    upsert_user(context, update)
-    with closing(db()) as conn, conn:
-        conn.execute("UPDATE users SET subscribed=0 WHERE chat_id=?", (update.effective_chat.id,))
-    await update.message.reply_text("Ок, отключил ежедневную доставку вопроса.", reply_markup=reply_main_menu())
+    if data == "qod:start":
+        USER_STATE[uid] = {"stage": "choose_mode"}
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Выбрать из вариантов", callback_data="qod:variants")],
+            [InlineKeyboardButton("Свободный ответ", callback_data="qod:free")],
+            [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]
+        ])
+        await q.message.reply_text("Как ответишь?\n• выбери вариант;\n• или напиши свой свободный ответ.", reply_markup=kb); return
 
-# =========================
-# ПЛАНИРОВЩИК
-# =========================
-scheduler = None
+    if data == "qod:variants":
+        USER_STATE[uid] = {"stage": "variants"}
+        idx = datetime.now().weekday() % len(QUESTION_INTROS)
+        question, options = QUESTION_INTROS[idx]
+        USER_STATE[uid]["question"] = question
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(opt, callback_data=f"qod:pick:{opt}")] for opt in options] +
+                                  [[InlineKeyboardButton("← Назад", callback_data="back_to_menu")]])
+        await q.message.reply_text(question, reply_markup=kb); return
 
-async def push_daily_question(context: ContextTypes.DEFAULT_TYPE) -> None:
-    with closing(db()) as conn:
-        rows = conn.execute("SELECT chat_id FROM users WHERE subscribed=1").fetchall()
-    for r in rows:
-        try:
-            await send_question(r["chat_id"], context, preface=False)
-        except Exception as e:
-            log.warning("Failed to send daily question to %s: %s", r["chat_id"], e)
+    if data.startswith("qod:pick:"):
+        choice = data.split(":", 2)[2]
+        st = USER_STATE.get(uid, {})
+        st["choice"] = choice
+        st["stage"] = "after_pick"
+        USER_STATE[uid] = st
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Добавить свободный комментарий", callback_data="qod:add_comment")],
+            [InlineKeyboardButton("Готово", callback_data="qod:done")],
+            [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]
+        ])
+        await q.message.reply_text(f"Принято ✅\nСохрани для себя: {choice}.\nХочешь добавить пару слов?",
+                                   reply_markup=kb); return
 
-def setup_scheduler(app: Application) -> None:
-    global scheduler
-    if scheduler:
+    if data == "qod:add_comment":
+        USER_STATE[uid]["stage"] = "await_comment"
+        await q.message.reply_text("Напиши коротко (1–2 предложения). Что важного для тебя на сегодня?"); return
+
+    if data == "qod:done":
+        await q.message.reply_text("Главное — маленький реальный шаг. Увидимся завтра ✌️",
+                                   reply_markup=InlineKeyboardMarkup([[
+                                       InlineKeyboardButton("Поставить напоминание на завтра", callback_data="qod:remind")
+                                   ], [
+                                       InlineKeyboardButton("← Назад", callback_data="back_to_menu")
+                                   ]]))
+        USER_STATE.pop(uid, None); return
+
+    if data == "qod:remind":
+        tz = pytz.timezone("Europe/Moscow")
+        job_name = f"qodremind_{uid}"
+        for job in context.job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()
+        context.job_queue.run_daily(qod_reminder, dtime(hour=9, minute=0, tzinfo=tz), name=job_name, data=uid)
+        await q.message.reply_text("Напомню завтра в 09:00. Можно отключить командой /stopremind.",
+                                   reply_markup=back_inline_kb()); return
+
+async def qod_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    uid = ctx.job.data
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ответить сейчас", callback_data="qod:start")]])
+    await ctx.bot.send_message(uid, "Вопрос дня ✨", reply_markup=kb)
+
+async def stop_remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    name = f"qodremind_{uid}"
+    for job in context.job_queue.get_jobs_by_name(name):
+        job.schedule_removal()
+    await update.message.reply_text("Напоминания отключены.", reply_markup=main_menu_kb())
+
+# === Free text for QOD comment OR normal routing ===
+async def message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    st = USER_STATE.get(uid)
+    if st and st.get("stage") == "await_comment":
+        txt = (update.message.text or "").strip()
+        USER_STATE.pop(uid, None)
+        await update.message.reply_text("Спасибо, записал ✅\nВозвращайся завтра — будет новый вопрос.",
+                                        reply_markup=InlineKeyboardMarkup([[
+                                            InlineKeyboardButton("Поставить напоминание на завтра", callback_data="qod:remind")
+                                        ], [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]]))
         return
-    scheduler = AsyncIOScheduler(timezone=TZ)
-    hh = config.QUESTION_PUSH_TIME.hour
-    mm = config.QUESTION_PUSH_TIME.minute
-    trigger = CronTrigger(hour=hh, minute=mm, second=0, timezone=TZ)
-    scheduler.add_job(push_daily_question, trigger, args=[app.bot], id="daily_q")
-    scheduler.start()
-    log.info("Scheduler started for daily question at %02d:%02d %s", hh, mm, config.TZ)
+    else:
+        await handle_text(update, context)
 
-# =========================
-# АДМИН-КОМАНДЫ
-# =========================
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    with closing(db()) as conn:
-        total = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        subs = conn.execute("SELECT COUNT(*) c FROM users WHERE subscribed=1").fetchone()["c"]
-        today = today_tz().isoformat()
-        ans = conn.execute("SELECT COUNT(*) c FROM answers WHERE answered_on=?", (today,)).fetchone()["c"]
-    msg = [fmt_bold("Статистика"), f"Пользователей: {total}", f"Подписаны на авто‑вопрос: {subs}", f"Ответов сегодня ({today}): {ans}"]
-    await update.message.reply_text("\n".join(msg), parse_mode=ParseMode.MARKDOWN)
+# === Callbacks common ===
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data
+    if data.startswith("guide:") or data == "back_to_menu":
+        await on_guide_choice(update, context); return
+    if data.startswith("qod:"):
+        await qod_callbacks(update, context); return
+    if data == "leave_request_mentorship":
+        await q.message.reply_text("Оставить заявку на наставничество — напиши мне в личку: ",
+                                   reply_markup=InlineKeyboardMarkup([[
+                                       InlineKeyboardButton("Написать Роману", url=CONTACT_TG_URL)
+                                   ], [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]])); return
+    if data == "leave_request_consultation":
+        await q.message.reply_text("Оставить заявку на консультацию — напиши мне в личку: ",
+                                   reply_markup=InlineKeyboardMarkup([[
+                                       InlineKeyboardButton("Написать Роману", url=CONTACT_TG_URL)
+                                   ], [InlineKeyboardButton("← Назад", callback_data="back_to_menu")]])); return
 
-# =========================
-# MAIN
-# =========================
-def main() -> None:
-    token = config.BOT_TOKEN
-    if not token:
-        raise RuntimeError("Не найден BOT_TOKEN. Задай его как переменную окружения (Render / .env / Docker).")
-
-    app: Application = ApplicationBuilder().token(token).build()
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN env var is empty. Set it in Render → Environment.")
+    app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("subscribe", subscribe))
-    app.add_handler(CommandHandler("unsubscribe", unsubscribe))
-    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("menu", menu_cmd))
+    app.add_handler(CommandHandler("stopremind", stop_remind))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
     app.add_handler(CallbackQueryHandler(callbacks))
 
-    setup_scheduler(app)
-    log.info("Bot is up.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
+
+    logging.info("Bot started.")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

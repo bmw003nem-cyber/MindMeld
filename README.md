@@ -1,32 +1,20 @@
-# Question Bot — релиз под ID 252641015
+# MindMeld — FINISHED (single-file)
 
-Готово к деплою на Render / локальный запуск / Docker. Твой admin ID уже вшит.
+**Что внутри**
+- `bot.py` — единый файл бота.
+- `requirements.txt` — зависимости.
 
-## Render (просто)
-1. Залей файлы в репозиторий или напрямую.
-2. Создай Web Service (Python).
-3. **Environment**:
-   - BOT_TOKEN = <твой токен бота>
-   - TZ = Europe/Amsterdam (можно поменять)
-   - PUSH_HOUR = 9
-   - PUSH_MIN = 0
-   - (необязательно) ADMIN_IDS = ещё ID через запятую
-4. **Start Command**: `python bot.py`
-5. Добавь Persistent Disk и примонтируй в `/app/data` (для сохранения БД).
+**Как это работает**
+- `BOT_TOKEN` берётся из переменных окружения Render (Environment → `BOT_TOKEN`).
+- Все ссылки/юзернеймы уже зашиты в код: ничего руками не вписывать.
 
-## Локально
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+**Файлы, которые должны лежать рядом (как у тебя в репо уже есть):**
+- PDF: `guide_path_to_self.pdf`, `guide_know_but_dont_do.pdf`, `guide_self_acceptance.pdf`, `guide_shut_the_mind.pdf`
+- Картинки: `assets/welcome.jpg`, `assets/qr.png`
+
+**Запуск локально (если нужно):**
+```
 pip install -r requirements.txt
-cp .env.example .env  # и впиши BOT_TOKEN
+export BOT_TOKEN=XXX   # или set BOT_TOKEN=XXX на Windows
 python bot.py
 ```
-
-## Команды бота
-- /start — меню
-- /subscribe — включить ежедневную рассылку вопроса
-- /unsubscribe — выключить рассылку
-- /stats — краткая статистика
-
-Папка `data/` создаётся автоматически. БД: `data/bot.sqlite3`.
