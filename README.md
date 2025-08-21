@@ -1,20 +1,19 @@
-# MindMeld — FINISHED (single-file)
+# MindMeld — FINAL (single-file + keep-alive HTTP)
 
-**Что внутри**
-- `bot.py` — единый файл бота.
-- `requirements.txt` — зависимости.
+Мы оставляем тип сервиса **Web Service** на Render и используем встроенный `keep-alive` HTTP-сервер,
+чтобы пингер (UptimeRobot) видел живой порт. Основная логика бота — `run_polling()`.
 
-**Как это работает**
-- `BOT_TOKEN` берётся из переменных окружения Render (Environment → `BOT_TOKEN`).
-- Все ссылки/юзернеймы уже зашиты в код: ничего руками не вписывать.
+## Что внутри
+- `bot.py` — единый файл с ботом и HTTP keep-alive.
+- `requirements.txt` — зависимости (python-telegram-bot + Flask + pytz).
 
-**Файлы, которые должны лежать рядом (как у тебя в репо уже есть):**
-- PDF: `guide_path_to_self.pdf`, `guide_know_but_dont_do.pdf`, `guide_self_acceptance.pdf`, `guide_shut_the_mind.pdf`
-- Картинки: `assets/welcome.jpg`, `assets/qr.png`
+## Что настроить на Render
+1) **Environment → BOT_TOKEN** — токен от @BotFather.
+2) **Start Command**: `python bot.py`
+3) В репозитории должны лежать:
+   - `assets/welcome.jpg`, `assets/qr.png`
+   - `guide_path_to_self.pdf`, `guide_know_but_dont_do.pdf`, `guide_self_acceptance.pdf`, `guide_shut_the_mind.pdf`
+4) Если были старые процессы: сделай **Manual Deploy → Clear build cache & deploy**.
 
-**Запуск локально (если нужно):**
-```
-pip install -r requirements.txt
-export BOT_TOKEN=XXX   # или set BOT_TOKEN=XXX на Windows
-python bot.py
-```
+## Healthcheck для пингера
+- URL: `https://<твоё_имя>.onrender.com/health`
