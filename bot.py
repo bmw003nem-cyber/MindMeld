@@ -1,20 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-MindMeld Bot — финальная сборка (welcome не затираем)
-- фото-приветствие без кнопок + отдельное inline-меню
-- Flask keep-alive (/ и /health) для Render + UptimeRobot
-- «Поддержать» с QR
+MindMeld Bot — финальная сборка
+- Приветственное фото без кнопок + отдельное текстовое меню (inline) → фото не затирается
+- Flask keep-alive (/ , /health) + внутренний self-ping к /health
+- «Поддержать» (QR), «Отзывы», «Связаться», «Диагностика»
 - «Гайды»: 1 PDF после проверки подписки
-- «Вопрос дня 2.0»: варианты + свободный ответ + напоминание 09:00 Europe/Moscow
-- «Наставничество», «Консультация», «Диагностика», «Отзывы», «Связаться»
+- «Вопрос дня 2.0»: варианты + свободный ответ + ежедневное напоминание 09:00 (Europe/Moscow)
 """
 
 import logging
 import os
+import threading
+import time
+import urllib.request
 from threading import Thread
 from datetime import datetime, time as dtime
-import pytz
 
+import pytz
 from flask import Flask
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, ReplyKeyboardRemove
@@ -25,26 +27,26 @@ from telegram.ext import (
     ContextTypes, filters
 )
 
-# ─────────────────────────── ЛОГИ ───────────────────────────
+# ────────────── ЛОГИ ──────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 log = logging.getLogger("mindmeld_bot")
 
-# ───────────────────────── НАСТРОЙКИ ────────────────────────
+# ────────────── НАСТРОЙКИ ─────────
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN пуст. Укажи его в Render → Environment.")
 
-CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"
+CHANNEL_USERNAME = "@vse_otvety_vnutri_nas"  # канал для проверки подписки
 CHANNEL_ID = ""  # можно numeric id; если пусто — используем username
 
 # Ссылки
 REVIEWS_CHANNEL_URL = "https://t.me/+4Ov29pR6uj9iYjgy"
 REVIEWS_POST_URL    = "https://t.me/vse_otvety_vnutri_nas/287"
 TRIBUTE_URL         = "https://t.me/tribute/app?startapp=dq3J"
-CONTACT_TG_URL      = "https://t.me/R_V_Bodonenkov4"   # <-- обновлённый ник
+CONTACT_TG_URL      = "https://t.me/R_V_Bodonenkov4"
 DIAGNOSTIC_URL      = "https://t.me/m/0JIRBvZ_NmQy"
 
 # Файлы
@@ -57,9 +59,9 @@ GUIDE_FILES = {
     "shut_the_mind":     "guide_shut_the_mind.pdf",
 }
 
-# ─────────────────────────── ТЕКСТЫ ─────────────────────────
+# ────────────── ТЕКСТЫ ─────────────
 WELCOME_TEXT = (
-   "<b>👋 Привет, рад видеть тебя в моём пространстве!</b>\n\n"
+    "<b>👋 Привет, рад видеть тебя в моём пространстве!</b>\n\n"
     "Я — Роман, предприниматель и наставник. Уже более 200 дней подряд практикую осознанные привычки и исследую, "
     "как маленькие шаги меняют жизнь в долгую. За 8 лет я прошёл путь от «живу по инерции» до состояния, когда сам "
     "создаю свою реальность и знаю, чего хочу.\n\n"
@@ -67,7 +69,7 @@ WELCOME_TEXT = (
     "🔧 инструменты для энергии и ясности,\n"
     "🎯 способы находить своё дело и развивать его,\n"
     "🧠 опыт, который помогает не просто «читать и знать», а реально применять.\n\n"
-    "<u>Что можно сделать прямо сейчас в этом боте:</u>\n"
+    "Что можно сделать прямо сейчас в этом боте:\n"
     "• Записаться на диагностику или консультацию\n"
     "• Скачать полезные гайды (после подписки на канал)\n"
     "• Узнать о программе наставничества\n"
@@ -115,16 +117,21 @@ CONSULTATION_TEXT = (
     "Сомневаешься, с чего начать? Жми «Записаться на диагностику» — это бесплатно, 30 минут."
 )
 
+DIAG_TEXT = (
+    "<b>Бесплатная диагностика — 30 минут, чтобы понять твой запрос и формат помощи</b>\n\n"
+    "Это короткая стратегическая встреча со мной, где мы:\n"
+    "• проясняем твой запрос и цель;\n"
+    "• смотрим, что мешает сейчас;\n"
+    "• решаем, подойдёт ли тебе консультация или наставничество, и чем они помогут;\n"
+    "• даю 1–2 шага, с которых можно начать уже сегодня.\n\n"
+    "🔎 Цель диагностики — понять, подхожу ли я тебе как проводник и какой формат даст лучший результат.\n\n"
+    "👉 Записаться на диагностику: по кнопке ниже."
+)
+
 GUIDES_HEADER = (
     "<b>Выбери один гайд</b>\n"
     "⚠️ Можно получить <b>только один</b>, чтобы сфокусироваться и дойти до результата.\n\n"
     "Перед скачиванием бот проверит подписку на канал."
-)
-
-DIAG_TEXT = (
-    "<b>Бесплатная диагностика — 30 минут</b>\n\n"
-    "Проясним запрос и цель, решим, подойдёт ли консультация или наставничество, дам 1–2 шага на старт.\n\n"
-    "Цель — понять, подхожу ли я тебе как проводник и какой формат даст лучший результат."
 )
 
 QUESTION_INTROS = [
@@ -135,7 +142,7 @@ QUESTION_INTROS = [
     ("Какой минимум сделаешь при любой погоде?", ["1 действие","3 действия","5 действий","Сначала 1 — потом ещё"]),
 ]
 
-# ────────────────────── KEEP‑ALIVE HTTP ─────────────────────
+# ─────────── KEEP‑ALIVE HTTP + SELF‑PING ───────────
 http = Flask(__name__)
 
 @http.get("/")
@@ -150,10 +157,24 @@ def _run_http():
     port = int(os.getenv("PORT", "10000"))
     http.run(host="0.0.0.0", port=port)
 
+def _self_ping_loop():
+    base = os.getenv("BASE_URL", "").strip()
+    if not base:
+        return
+    url = base.rstrip("/") + "/health"
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                r.read()
+        except Exception:
+            pass
+        time.sleep(240)  # раз в 4 минуты
+
 def keep_alive():
     Thread(target=_run_http, daemon=True).start()
+    threading.Thread(target=_self_ping_loop, daemon=True).start()
 
-# ──────────────────── КНОПКИ (INLINE) ───────────────────────
+# ─────────── КНОПКИ ───────────
 def menu_inline_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎯 Наставничество", callback_data="nav:mentorship"),
@@ -200,16 +221,15 @@ def guides_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("← Назад", callback_data="nav:menu")]
     ])
 
-# ───────────── Служебные хранилища ─────────────
-USER_STATE = {}             # для Вопроса дня
-USER_GUIDE_RECEIVED = set() # кто уже получил один гайд
-
+# ─────────── Служебные хранилища ───────────
+USER_STATE = {}
+USER_GUIDE_RECEIVED = set()
 LEGACY_BUTTON_TEXTS = {
     "Наставничество","Консультация","Гайды","Вопрос дня",
     "Отзывы","Поддержать","Диагностика (30 мин, бесплатно)","Связаться"
 }
 
-# ───────────── Универсальная правка сообщений ─────────────
+# ─────────── Универсальная правка ───────────
 async def safe_edit(q, text, reply_markup=None, parse_mode=ParseMode.HTML):
     try:
         msg = q.message
@@ -221,7 +241,7 @@ async def safe_edit(q, text, reply_markup=None, parse_mode=ParseMode.HTML):
     except Exception:
         return await q.message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
-# ───────────────────── ЭКРАНЫ/ПОТОКИ ────────────────────────
+# ─────────── Экраны ───────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     try:
@@ -231,9 +251,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         with open(WELCOME_PHOTO, "rb") as f:
-            await ctx.bot.send_photo(
-                chat_id, photo=f, caption=WELCOME_TEXT, parse_mode=ParseMode.HTML
-            )
+            await ctx.bot.send_photo(chat_id, photo=f, caption=WELCOME_TEXT, parse_mode=ParseMode.HTML)
     except Exception as e:
         log.warning("WELCOME_PHOTO send failed: %s", e)
         await ctx.bot.send_message(chat_id, WELCOME_TEXT, parse_mode=ParseMode.HTML)
@@ -294,7 +312,6 @@ async def callbacks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("guide:"):
         await handle_guide(update, ctx); return
-
     if data.startswith("qod:"):
         await qod_callbacks(update, ctx); return
 
@@ -330,7 +347,7 @@ async def send_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE, via_callb
     else:
         await ctx.bot.send_message(chat_id, caption, parse_mode=ParseMode.HTML, reply_markup=support_kb())
 
-# ─────────── Гайды (1 шт. после проверки подписки) ───────────
+# ─────────── Гайды ───────────
 async def handle_guide(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
@@ -451,7 +468,7 @@ async def qod_reminder(ctx: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("Ответить сейчас", callback_data="qod:start")]])
     await ctx.bot.send_message(uid, "Вопрос дня ✨", reply_markup=kb)
 
-# ─────────── Обработчик текстов (QOD комментарий + меню) ────
+# ─────────── Обработчик текстов ───────────
 async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     uid = update.effective_user.id if update.effective_user else None
@@ -480,7 +497,7 @@ async def message_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Выбирай раздел 👇", reply_markup=menu_inline_kb())
 
-# ─────────── Отключение напоминаний ───────────
+# ─────────── Отключение напоминаний ─────────
 async def stopremind(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     job_name = f"qodremind_{uid}"
@@ -488,7 +505,7 @@ async def stopremind(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         job.schedule_removal()
     await update.message.reply_text("Напоминания отключены (если были).")
 
-# ─────────────────────────── MAIN ────────────────────────────
+# ─────────── MAIN ───────────
 def main():
     keep_alive()
 
@@ -502,7 +519,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_router))
 
-    log.info("Bot started (inline menu + keep‑alive, polling).")
+    log.info("Bot started (inline menu + keep‑alive + self‑ping, polling).")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
